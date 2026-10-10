@@ -14,6 +14,18 @@ use Payitgo\Exception\PayitgoException;
 use Payitgo\Exception\SignatureVerificationException;
 use Payitgo\Webhook;
 
+// Every notice, warning and deprecation fails the run, whatever php.ini hides:
+// merchants run the SDK with their own error reporting, and a new PHP
+// deprecates functions (curl_close() in 8.5).
+error_reporting(E_ALL);
+$problems = [];
+set_error_handler(function (int $level, string $message, string $file, int $line) use (&$problems): bool {
+    if (error_reporting() & $level) { // not silenced with @
+        $problems[] = $message . ' (' . basename($file) . ':' . $line . ')';
+    }
+    return true;
+});
+
 // Signed by the gateway's own signer.
 const SECRET = 'whsec_test_secret';
 const HEADER = 't=1760000000,v1=6abd292fdf2ecc51779c161f5d4be2d47236f7a43fbaa9dd7093303904b91a7b';
@@ -186,5 +198,9 @@ try {
     check('webhooks->constructEvent without a secret', str_contains($e->getMessage(), 'no webhook secret'));
 }
 
+foreach (array_unique($problems) as $problem) {
+    check('no notice, warning or deprecation: ' . $problem, false);
+}
 echo $failures === 0 ? "ALL PASSED\n" : "$failures FAILED\n";
+
 exit($failures === 0 ? 0 : 1);

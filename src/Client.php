@@ -86,7 +86,8 @@ final class Client
             $raw = curl_exec($ch);
             $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             $error = curl_error($ch);
-            curl_close($ch);
+            // No curl_close(): the handle is freed with $ch (PHP 8.0+), and
+            // PHP 8.5 deprecates the call.
 
             $retryable = $raw === false || $status === 429 || $status >= 500;
             if ($retryable && $attempt < $this->maxRetries) {
