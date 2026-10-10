@@ -18,7 +18,7 @@ final class Client
     public const VERSION = '0.1.0';
 
     /** Used when neither base_url nor PAYITGO_BASE_URL is set. */
-    private const DEFAULT_BASE_URL = '';
+    private const DEFAULT_BASE_URL = 'https://api.payitgo.co';
 
     /** False for a test key (sk_test_…), true for a live key (sk_live_…). */
     public readonly bool $livemode;
