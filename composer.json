@@ -4,6 +4,9 @@
     "type": "library",
     "license": "MIT",
     "homepage": "https://github.com/payitgo/php-sdk",
+    "authors": [
+        { "name": "payitgo", "homepage": "https://payitgo.co" }
+    ],
     "keywords": ["payitgo", "payments", "crypto", "usdt", "bitcoin"],
     "require": {
         "php": ">=8.1",
