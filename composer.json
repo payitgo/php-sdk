@@ -3,7 +3,7 @@
     "description": "PHP library for the payitgo crypto payment gateway",
     "type": "library",
     "license": "MIT",
-    "homepage": "https://github.com/thedivinez/payitgo-php",
+    "homepage": "https://github.com/payitgo/php-sdk",
     "keywords": ["payitgo", "payments", "crypto", "usdt", "bitcoin"],
     "require": {
         "php": ">=8.1",
