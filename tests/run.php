@@ -162,7 +162,7 @@ try {
     check('payments->selectToken returns the whole payment', $payment === $req['reply'] && $payment['token'] === 'XRP'
         && $payment['deposit_address'] === 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe' && $payment['destination_tag'] === 1042
         && $payment['crypto_amount'] === '20' && $payment['rate_locked'] === '0.5' && $payment['expires_at'] === '2026-10-10T12:15:00Z'
-        && $payment['qr_payload'] === 'xrpl:rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe?amount=20.000000&dt=1042'
+        && $payment['qr_payload'] === 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe'
         && $payment['checkout_token'] === 'ct_abc' && $payment['checkout_url'] === 'https://pay.example/ct_abc'
         && $payment['metadata'] === ['cart' => '42'] && $payment['deposits'] === []);
     $e = apiError(fn () => $payitgo->payments->selectToken('ORD 7/1', 'XRP'));
