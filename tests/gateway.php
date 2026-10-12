@@ -20,6 +20,8 @@ $webhook = $state['webhook'] ?? [
 ];
 // The payments whose coin has been chosen: choosing again is a 409.
 $chosen = $state['chosen'] ?? [];
+// The payments being simulated: simulating again is a 409.
+$simulating = $state['simulating'] ?? [];
 $body = json_decode($raw, true) ?? [];
 // A storefront's key may read and test the webhook, not change it.
 $storefront = ($headers['authorization'] ?? '') === 'Bearer sk_test_store';
@@ -33,11 +35,38 @@ $withCoin = fn (string $token): array => [
     'amount_due_usd' => '10', 'fees_paid_by_customer' => false, 'network_fee' => '0.000012', 'network_fee_usd' => '0.01',
     'settlement' => 'custodial', 'received_usd' => '0', 'rate_locked' => '0.5', 'deposits' => [],
     'expires_at' => '2026-10-10T12:15:00Z', 'created_at' => '2026-10-10T12:00:00Z',
-    'network_fee_note' => 'XRP Ledger testnet: test XRP only. Include destination tag — required.',
+    'network_fee_note' => 'Near-zero fees. Include destination tag — required.',
     'qr_payload' => 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe',
     'checkout_token' => 'ct_abc', 'checkout_url' => 'https://pay.example/ct_abc', 'description' => 'Order 7',
     'metadata' => ['cart' => '42'],
 ];
+// pay_2 (order 'ORD 8/1') is a test payment with its coin; its simulation has
+// played a first deposit.
+$simulated = fn (string $outcome): array => [
+    'id' => 'pay_2', 'merchant_id' => 'mch_1', 'order_id' => 'ORD 8/1', 'status' => 'detecting', 'livemode' => false,
+    'simulation' => ['outcome' => $outcome, 'state' => 'running'],
+    'token' => 'USDT_TRC20', 'chain' => 'tron', 'deposit_address' => 'TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o',
+    'crypto_amount' => '20', 'received_amount' => '20', 'usd_amount' => '20', 'amount_due_usd' => '20',
+    'fees_paid_by_customer' => false, 'network_fee' => '1', 'network_fee_usd' => '0.3', 'settlement' => 'custodial',
+    'received_usd' => '20', 'rate_locked' => '1',
+    'deposits' => [[
+        'tx_id' => 'sim_pay_2_1791817211348_0', 'token' => 'USDT_TRC20', 'chain' => 'tron', 'amount' => '20',
+        'usd_value' => '20', 'counted' => true, 'status' => 'pending', 'seen_at' => '2026-10-10T12:00:05Z', 'simulated' => true,
+    ]],
+    'expires_at' => '2026-10-10T12:15:00Z', 'created_at' => '2026-10-10T12:00:00Z',
+    'network_fee_note' => 'Near-zero fees on Tron. Fastest settlement.',
+    'qr_payload' => 'TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o',
+];
+// A created payment echoes the request; with simulate, it shows its
+// simulation instead: running when it has its coin, else waiting for it.
+$created = function (array $body): array {
+    $payment = array_merge($body, ['id' => 'pay_1', 'status' => 'pending']);
+    if (isset($body['simulate'])) {
+        unset($payment['simulate']);
+        $payment['simulation'] = ['outcome' => $body['simulate'], 'state' => isset($body['token']) ? 'running' : 'requested'];
+    }
+    return $payment;
+};
 
 [$status, $reply] = match (true) {
     $path === '/v1/webhook' && $method === 'GET' => [200, ['webhook' => $webhook]],
@@ -57,7 +86,7 @@ $withCoin = fn (string $token): array => [
             'attempts' => 0, 'max_attempts' => 7, 'next_attempt_at' => '2026-10-10T12:00:00Z',
             'created_at' => '2026-10-10T12:00:00Z',
         ]]],
-    $path === '/v1/payments' && $method === 'POST' => [201, array_merge($body, ['id' => 'pay_1', 'status' => 'pending'])],
+    $path === '/v1/payments' && $method === 'POST' => [201, $created($body)],
     $path === '/v1/tokens' && $method === 'GET' => [200, ['tokens' => [[
         'token' => 'USDT_BEP20', 'chain' => 'bsc', 'min_usd' => '1', 'network_fee_usd' => '0.01', 'amount_due_usd' => '40.43', 'fee_note' => '',
     ]]]],
@@ -67,9 +96,15 @@ $withCoin = fn (string $token): array => [
             isset($chosen['pay_1']) => [409, ['error' => 'the coin for this payment has already been chosen']],
             default => [200, $chosen['pay_1'] = $withCoin($body['token'])],
         },
+    $method === 'POST' && preg_match('#^/v1/payments/([^/]+)/simulate$#', $path, $m) === 1
+        && in_array(rawurldecode($m[1]), ['pay_2', 'ORD 8/1'], true) => match (true) {
+            ($body['outcome'] ?? '') === '' => [400, ['error' => 'outcome is required']],
+            isset($simulating['pay_2']) => [409, ['error' => 'a simulation is already running for this payment']],
+            default => [200, $simulating['pay_2'] = $simulated($body['outcome'])],
+        },
     default => [404, ['error' => 'not found']],
 };
-file_put_contents($stateFile, json_encode(['webhook' => $webhook, 'chosen' => $chosen]));
+file_put_contents($stateFile, json_encode(['webhook' => $webhook, 'chosen' => $chosen, 'simulating' => $simulating]));
 file_put_contents((string) getenv('PAYITGO_GATEWAY_LOG'), json_encode([
     'method' => $method,
     'path' => $path,

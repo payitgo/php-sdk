@@ -6,6 +6,11 @@ namespace Payitgo;
 
 final class Payments
 {
+    /** The outcomes a test payment can be made to go through: see simulate(). */
+    public const SIMULATION_OUTCOMES = [
+        'confirmed', 'overpaid', 'partially_paid', 'underpaid', 'expired', 'failed', 'wrong_asset', 'paid_late',
+    ];
+
     /** @param ?string $webhookUrl the client's default webhook_url */
     public function __construct(private readonly Client $client, private readonly ?string $webhookUrl = null)
     {
@@ -17,7 +22,8 @@ final class Payments
      * coins to offer), description, metadata, customer_email, success_url,
      * cancel_url, webhook_url (https: gets the payment's events instead of the
      * webhook's URL, signed with the same secret; default: the client's
-     * webhook_url).
+     * webhook_url), simulate (test keys only: the outcome to simulate, as
+     * simulate() does, once the payment has its coin).
      * Safe to retry: an order with an open payment returns that payment.
      *
      * @param array<string, mixed> $params
@@ -56,6 +62,20 @@ final class Payments
     public function selectToken(string $id, string $token): array
     {
         return $this->client->request('POST', '/v1/payments/' . rawurlencode($id) . '/token', ['token' => $token]);
+    }
+
+    /**
+     * Plays an outcome (one of SIMULATION_OUTCOMES) on a test payment: payitgo
+     * sends its deposits, status changes and webhooks a few seconds apart, with
+     * no coins. $id is the payment's id (pay_…) or your order id. Returns the
+     * whole payment, with its simulation. A live payment is a PayitgoException
+     * with status 400; a simulation that is still running, 409.
+     *
+     * @return array<string, mixed>
+     */
+    public function simulate(string $id, string $outcome): array
+    {
+        return $this->client->request('POST', '/v1/payments/' . rawurlencode($id) . '/simulate', ['outcome' => $outcome]);
     }
 
     /**

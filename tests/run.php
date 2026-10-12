@@ -12,6 +12,7 @@ spl_autoload_register(function (string $class): void {
 use Payitgo\Client;
 use Payitgo\Exception\PayitgoException;
 use Payitgo\Exception\SignatureVerificationException;
+use Payitgo\Payments;
 use Payitgo\Webhook;
 
 // Every notice, warning and deprecation fails the run, whatever php.ini hides:
@@ -169,6 +170,23 @@ try {
     check('payments->selectToken escapes an order id', $last()['path'] === '/v1/payments/ORD%207%2F1/token');
     check('payments->selectToken: a coin already chosen is a 409', $e !== null && $e->status === 409
         && $e->getMessage() === 'the coin for this payment has already been chosen');
+
+    $payment = $payitgo->payments->simulate('pay_2', 'confirmed');
+    $req = $last();
+    check('payments->simulate posts the outcome with the key', $req['method'] === 'POST' && $req['path'] === '/v1/payments/pay_2/simulate'
+        && $req['headers']['authorization'] === 'Bearer sk_test_abc' && $req['headers']['content-type'] === 'application/json'
+        && $req['body'] === ['outcome' => 'confirmed']);
+    check('payments->simulate returns the payment with its simulation', $payment === $req['reply']
+        && $payment['simulation'] === ['outcome' => 'confirmed', 'state' => 'running']
+        && $payment['deposits'][0]['simulated'] === true && str_starts_with($payment['deposits'][0]['tx_id'], 'sim_'));
+    $e = apiError(fn () => $payitgo->payments->simulate('ORD 8/1', 'confirmed'));
+    check('payments->simulate escapes an order id', $last()['path'] === '/v1/payments/ORD%208%2F1/simulate');
+    check('payments->simulate: a simulation still running is a 409', $e !== null && $e->status === 409
+        && $e->getMessage() === 'a simulation is already running for this payment');
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-8', 'amount_usd' => 20, 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']);
+    check('payments->create sends simulate', $last()['body'] === ['order_id' => 'ORD-8', 'amount_usd' => '20', 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']
+        && $payment['simulation'] === ['outcome' => 'confirmed', 'state' => 'running']
+        && in_array('confirmed', Payments::SIMULATION_OUTCOMES, true));
 
     $tokens = $payitgo->tokens->list();
     check('tokens->list lists every token', $last()['method'] === 'GET' && $last()['path'] === '/v1/tokens' && $last()['query'] === ''

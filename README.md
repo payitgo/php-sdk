@@ -50,8 +50,8 @@ if ($event['type'] === 'payment.confirmed') {
 http_response_code(200);
 ```
 
-Start with your test key (`sk_test_…`) and testnet coins; switch to the live key
-(`sk_live_…`) when the account owner has turned live mode on.
+Start with your test key (`sk_test_…`), where you [simulate](#test-mode) what the customer
+pays; switch to the live key (`sk_live_…`) when the account owner has turned live mode on.
 
 ## Your own payment page
 
@@ -77,6 +77,27 @@ $chosen = $payitgo->payments->selectToken($payment['id'], 'USDT_TRC20'); // or y
 The coin is chosen once: choosing again is a `409` (`payments->retrieve()` then returns the
 payment with its coin). A coin outside `token_options`, or a payment that can no longer be
 paid, is a `400`.
+
+## Test mode
+
+A test payment gets an address like a live one, but no coins are involved: you choose an
+outcome and payitgo plays its deposits, status changes and webhooks a few seconds apart
+([Test mode](https://api.payitgo.co/docs/testing)).
+
+```php
+// Choose the outcome when you create the payment (with token it starts at once,
+// without it once the coin is chosen)…
+$payitgo->payments->create(['order_id' => 'TEST-1', 'amount_usd' => 10, 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']);
+
+// …or later, on a payment you already have (its id or your order id).
+$payment = $payitgo->payments->simulate('TEST-2', 'partially_paid');
+// $payment['simulation']: ['outcome' => 'partially_paid', 'state' => 'running']
+```
+
+Outcomes (`\Payitgo\Payments::SIMULATION_OUTCOMES`): `confirmed`, `overpaid`, `partially_paid`,
+`underpaid`, `expired`, `failed`, `wrong_asset`, `paid_late`. Simulated deposits have
+`'simulated' => true` and a `tx_id` starting with `sim_`. A live key gets `400`; a payment
+whose simulation is still running, `409`.
 
 ## Webhooks (IPN)
 
@@ -169,8 +190,9 @@ $payitgo = new \Payitgo\Client($apiKey, [
 $payitgo->livemode;                                   // false for sk_test_ keys
 $payitgo->payments->create(['order_id' => …, 'amount_usd' => …, 'token' => …,
                           'description' => …, 'metadata' => […], 'customer_email' => …,
-                          'success_url' => …, 'cancel_url' => …, 'webhook_url' => …]);
+                          'success_url' => …, 'cancel_url' => …, 'webhook_url' => …, 'simulate' => …]);
 $payitgo->payments->selectToken('pay_…', $token);     // or your order id: the payment with its coin
+$payitgo->payments->simulate('pay_…', 'confirmed');   // test keys: plays the outcome
 $payitgo->payments->retrieve('pay_…');                // or your order id
 $payitgo->payments->list(['status' => 'confirmed', 'store_id' => 'sto_…', 'limit' => 50, 'offset' => 0]);
 $payitgo->tokens->list();                             // [['token' => …, 'chain' => …, 'min_usd' => …, 'network_fee_usd' => …, 'fee_note' => …]]
