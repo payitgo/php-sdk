@@ -214,10 +214,10 @@ $payitgo->payments->create(['order_id' => …, 'amount_usd' => …, 'token' => �
                           'description' => …, 'metadata' => […], 'customer_email' => …,
                           'success_url' => …, 'cancel_url' => …, 'webhook_url' => …, 'simulate' => …]);
 $payitgo->payments->create(['order_id' => …, 'price_amount' => …, 'price_currency' => …, …]); // priced in another currency
-$payitgo->payments->selectToken('pay_…', $token);     // or your order id: the payment with its coin
-$payitgo->payments->simulate('pay_…', 'confirmed');   // test keys: plays the outcome
-$payitgo->payments->retrieve('pay_…');                // or your order id
-$payitgo->payments->list(['status' => 'confirmed', 'store_id' => 'sto_…', 'limit' => 50, 'offset' => 0]);
+$payitgo->payments->selectToken($paymentId, $token);  // or your order id: the payment with its coin
+$payitgo->payments->simulate($paymentId, 'confirmed'); // test keys: plays the outcome
+$payitgo->payments->retrieve($paymentId);             // or your order id
+$payitgo->payments->list(['status' => 'confirmed', 'store_id' => $storeId, 'limit' => 50, 'offset' => 0]);
 $payitgo->tokens->list();                             // [['token' => …, 'chain' => …, 'min_usd' => …, 'network_fee_usd' => …, 'fee_note' => …]]
 $payitgo->tokens->list('49.90');                      // the coins a $49.90 payment offers, with amount_due_usd
 $payitgo->checkout->retrieve($checkoutToken);         // public payer view
