@@ -188,6 +188,23 @@ try {
         && $payment['simulation'] === ['outcome' => 'confirmed', 'state' => 'running']
         && in_array('confirmed', Payments::SIMULATION_OUTCOMES, true));
 
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-10', 'price_amount' => 45.5, 'price_currency' => 'eur']);
+    check('payments->create sends a price in another currency, its amount as a string', $last()['body'] === ['order_id' => 'ORD-10', 'price_amount' => '45.5', 'price_currency' => 'eur']);
+    check('payments->create: the payment carries its price', $payment['price_amount'] === '45.5' && $payment['price_currency'] === 'EUR'
+        && $payment['price_rate'] === '1.082' && $payment['usd_amount'] === '49.23' && !isset($payment['amount_usd']));
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-11', 'amount_usd' => '10']);
+    check('payments->create: a payment in dollars has no price fields', $last()['body'] === ['order_id' => 'ORD-11', 'amount_usd' => '10']
+        && !isset($payment['price_amount']) && !isset($payment['price_currency']) && !isset($payment['price_rate']));
+    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-12', 'amount_usd' => 10, 'price_amount' => '45.50', 'price_currency' => 'EUR']));
+    check('payments->create: amount_usd and a price is a 400', $e !== null && $e->status === 400
+        && $e->getMessage() === 'give amount_usd, or price_amount and price_currency: not both');
+    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-13', 'price_amount' => '45.50', 'price_currency' => 'EURO']));
+    check('payments->create: a code that is no currency is a 400', $e !== null && $e->status === 400
+        && $e->getMessage() === 'price_currency must be the ISO 4217 code of a currency (EUR, GBP, NGN…)');
+    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-14', 'price_amount' => '5000', 'price_currency' => 'XAF']));
+    check('payments->create: no exchange rate is a 503', $e !== null && $e->status === 503
+        && $e->getMessage() === 'exchange rate unavailable for price_currency: try again shortly');
+
     $tokens = $payitgo->tokens->list();
     check('tokens->list lists every token', $last()['method'] === 'GET' && $last()['path'] === '/v1/tokens' && $last()['query'] === ''
         && $tokens[0]['token'] === 'USDT_BEP20');

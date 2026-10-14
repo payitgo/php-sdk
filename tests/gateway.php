@@ -57,16 +57,29 @@ $simulated = fn (string $outcome): array => [
     'network_fee_note' => 'Near-zero fees on Tron. Fastest settlement.',
     'qr_payload' => 'TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o',
 ];
+// The dollar value of one unit of the currencies a price may be given in;
+// null: a currency whose rate cannot be had right now.
+$rates = ['EUR' => '1.082', 'XAF' => null];
 // A created payment echoes the request; with simulate, it shows its
-// simulation instead: running when it has its coin, else waiting for it.
-$created = function (array $body): array {
+// simulation instead: running when it has its coin, else waiting for it. A
+// price in another currency is converted into usd_amount, as the API does.
+$created = function (array $body) use ($rates): array {
     $payment = array_merge($body, ['id' => 'pay_1', 'status' => 'pending']);
     if (isset($body['simulate'])) {
         unset($payment['simulate']);
         $payment['simulation'] = ['outcome' => $body['simulate'], 'state' => isset($body['token']) ? 'running' : 'requested'];
     }
+    if (isset($body['price_currency'])) {
+        $currency = strtoupper($body['price_currency']);
+        $decimal = fn (string $v): string => str_contains($v, '.') ? rtrim(rtrim($v, '0'), '.') : $v;
+        $payment['usd_amount'] = $decimal(number_format((float) $body['price_amount'] * (float) $rates[$currency], 2, '.', ''));
+        $payment['price_amount'] = $decimal($body['price_amount']);
+        $payment['price_currency'] = $currency;
+        $payment['price_rate'] = $rates[$currency];
+    }
     return $payment;
 };
+$currency = strtoupper((string) ($body['price_currency'] ?? ''));
 
 [$status, $reply] = match (true) {
     $path === '/v1/webhook' && $method === 'GET' => [200, ['webhook' => $webhook]],
@@ -86,7 +99,12 @@ $created = function (array $body): array {
             'attempts' => 0, 'max_attempts' => 7, 'next_attempt_at' => '2026-10-10T12:00:00Z',
             'created_at' => '2026-10-10T12:00:00Z',
         ]]],
-    $path === '/v1/payments' && $method === 'POST' => [201, $created($body)],
+    $path === '/v1/payments' && $method === 'POST' => match (true) {
+        $currency !== '' && isset($body['amount_usd']) => [400, ['error' => 'give amount_usd, or price_amount and price_currency: not both']],
+        $currency !== '' && !array_key_exists($currency, $rates) => [400, ['error' => 'price_currency must be the ISO 4217 code of a currency (EUR, GBP, NGN…)']],
+        $currency !== '' && $rates[$currency] === null => [503, ['error' => 'exchange rate unavailable for price_currency: try again shortly']],
+        default => [201, $created($body)],
+    },
     $path === '/v1/tokens' && $method === 'GET' => [200, ['tokens' => [[
         'token' => 'USDT_BEP20', 'chain' => 'bsc', 'min_usd' => '1', 'network_fee_usd' => '0.01', 'amount_due_usd' => '40.43', 'fee_note' => '',
     ]]]],
