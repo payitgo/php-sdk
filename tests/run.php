@@ -27,10 +27,16 @@ set_error_handler(function (int $level, string $message, string $file, int $line
     return true;
 });
 
+// The test key, a storefront's test key and a live key (gateway.php knows them).
+const KEY = '8334dfeae25b9b200b75995e6e55cf8c3602120c1920bfef7a4ff8900b620881';
+const STORE_KEY = '7fd8a9991cc9aadccefc062f0467f180cb1ab0d388ff76cdaf0b1fbbd5c80296';
+const LIVE_KEY = '9a6fd52f16ba8258c4b71ec3a7ffbe4e22ebc4ff99a1bc073fd414e0bbd4ee15';
+
 // Signed by the gateway's own signer.
-const SECRET = 'whsec_test_secret';
-const HEADER = 't=1760000000,v1=6abd292fdf2ecc51779c161f5d4be2d47236f7a43fbaa9dd7093303904b91a7b';
-const BODY = '{"id":"evt_test_123","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"pay_123","order_id":"ORD-1","status":"confirmed","usd_amount":"10"}}';
+const SECRET = '05bd6b428158318cc38756fa34aa60795af0fc5d9a316dcc9b060c8ca1863fc3';
+const HEADER = 't=1760000000,v1=75eb20fb34bccab4b9121285930b076e5e60ccad0a2542bd76eb56d89744faed';
+const BODY = '{"id":"b8e1f80bd70ae0784c7855a4","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"040ffd5925d40e11c67b7238","order_id":"ORD-1","status":"confirmed","usd_amount":"10"}}';
+const OTHER_SECRET = 'bd4106123e659e259c401119d0c7ef0a221df306a5a414b6fb6a579499962d26';
 
 $failures = 0;
 function check(string $name, bool $ok): void
@@ -54,27 +60,29 @@ function rejects(callable $fn): bool
 $event = Webhook::constructEvent(BODY, HEADER, SECRET, 0);
 check('accepts a delivery signed by the gateway', $event['type'] === 'payment.confirmed' && $event['data']['order_id'] === 'ORD-1' && $event['livemode'] === false);
 check('rejects a changed body', rejects(fn () => Webhook::constructEvent(str_replace('"10"', '"1000"', BODY), HEADER, SECRET, 0)));
-check('rejects the wrong secret', rejects(fn () => Webhook::constructEvent(BODY, HEADER, 'whsec_other', 0)));
+check('rejects the wrong secret', rejects(fn () => Webhook::constructEvent(BODY, HEADER, OTHER_SECRET, 0)));
 check('rejects a missing header', rejects(fn () => Webhook::constructEvent(BODY, null, SECRET, 0)));
 check('rejects an old timestamp', rejects(fn () => Webhook::constructEvent(BODY, HEADER, SECRET)));
 $now = time();
 $fresh = 't=' . $now . ',v1=' . hash_hmac('sha256', $now . '.' . BODY, SECRET);
-check('accepts a fresh delivery', Webhook::constructEvent(BODY, $fresh, SECRET)['id'] === 'evt_test_123');
+check('accepts a fresh delivery', Webhook::constructEvent(BODY, $fresh, SECRET)['id'] === 'b8e1f80bd70ae0784c7855a4');
 
 putenv('PAYITGO_BASE_URL');
-try {
-    new Client('pk_123', ['base_url' => 'http://x']);
-    check('rejects a bad key', false);
-} catch (InvalidArgumentException) {
-    check('rejects a bad key', true);
+foreach (['', '  '] as $key) {
+    try {
+        new Client($key, ['base_url' => 'http://x']);
+        check('requires a key', false);
+    } catch (InvalidArgumentException $e) {
+        check('requires a key', $e->getMessage() === 'payitgo: the API key is required');
+    }
 }
 try {
-    new Client('sk_test_abc', ['base_url' => '']);
+    new Client(KEY, ['base_url' => '']);
     check('requires a base URL', false);
 } catch (InvalidArgumentException) {
     check('requires a base URL', true);
 }
-check('livemode from the key', (new Client('sk_live_abc', ['base_url' => 'http://x']))->livemode && !(new Client('sk_test_abc', ['base_url' => 'http://x']))->livemode);
+check('no livemode property: isLive() asks payitgo', !property_exists(Client::class, 'livemode'));
 
 // The webhook (IPN), against the fake gateway in gateway.php on 127.0.0.1.
 $probe = stream_socket_server('tcp://127.0.0.1:0');
@@ -96,7 +104,7 @@ if ($socket) {
     fclose($socket);
 }
 $last = fn (): array => json_decode((string) file_get_contents($log), true);
-$client = fn (string $key = 'sk_test_abc', array $options = []): Client => new Client($key, ['base_url' => "http://127.0.0.1:$port/", 'max_retries' => 0] + $options);
+$client = fn (string $key = KEY, array $options = []): Client => new Client($key, ['base_url' => "http://127.0.0.1:$port/", 'max_retries' => 0] + $options);
 function apiError(callable $fn): ?PayitgoException
 {
     try {
@@ -110,10 +118,21 @@ $payitgo = $client();
 $url = 'https://shop.example/payitgo/ipn';
 
 try {
+    check('isLive() is false for a test key', $payitgo->isLive() === false);
+    $req = $last();
+    check('isLive() reads the mode\'s webhook with the key', $req['method'] === 'GET' && $req['path'] === '/v1/webhook'
+        && $req['headers']['authorization'] === 'Bearer ' . KEY);
+    file_put_contents($log, '');
+    check('isLive() asks once', $payitgo->isLive() === false && file_get_contents($log) === '');
+    $live = $client(LIVE_KEY);
+    check('isLive() is true for a live key', $live->isLive() === true && $last()['headers']['authorization'] === 'Bearer ' . LIVE_KEY);
+    file_put_contents($log, '');
+    check('isLive() asks once, live too', $live->isLive() === true && file_get_contents($log) === '');
+
     $webhook = $payitgo->webhooks->get();
     $req = $last();
     check('webhooks->get reads the mode\'s webhook', $req['method'] === 'GET' && $req['path'] === '/v1/webhook' && $req['body'] === null
-        && $req['headers']['authorization'] === 'Bearer sk_test_abc' && $webhook['url'] === null && str_starts_with($webhook['secret'], 'whsec_'));
+        && $req['headers']['authorization'] === 'Bearer ' . KEY && $webhook['url'] === null && strlen($webhook['secret']) === 64);
 
     $e = apiError(fn () => $payitgo->webhooks->test());
     check('webhooks->test without a URL is a 400', $e !== null && $e->status === 400 && $e->getMessage() === 'no webhook url is set for this mode: set one first');
@@ -126,7 +145,7 @@ try {
     $delivery = $payitgo->webhooks->test();
     $req = $last();
     check('webhooks->test queues a ping', $req['method'] === 'POST' && $req['path'] === '/v1/webhook/test'
-        && $req['headers']['authorization'] === 'Bearer sk_test_abc' && $delivery['event_type'] === 'ping'
+        && $req['headers']['authorization'] === 'Bearer ' . KEY && $delivery['event_type'] === 'ping'
         && $delivery['status'] === 'pending' && $delivery['target'] === 'account' && $delivery['url'] === $url);
 
     $removed = $payitgo->webhooks->remove();
@@ -137,7 +156,7 @@ try {
     $e = apiError(fn () => $payitgo->webhooks->set('http://shop.example/hook'));
     check('webhooks errors carry the message and status', $e !== null && $e->status === 400 && $e->getMessage() === 'url must use https');
 
-    $store = $client('sk_test_store');
+    $store = $client(STORE_KEY);
     $e = apiError(fn () => $store->webhooks->set($url));
     check('a storefront\'s key cannot set the webhook', $e !== null && $e->status === 403
         && $e->getMessage() === "a storefront's key cannot change the account's webhook: set webhook_url on its payments instead");
@@ -148,7 +167,7 @@ try {
     $payment = $payitgo->payments->create(['order_id' => 'ORD-2', 'amount_usd' => 10, 'webhook_url' => 'https://shop.example/own']);
     check('payments->create sends its own webhook_url', $last()['body']['webhook_url'] === 'https://shop.example/own'
         && $payment['webhook_url'] === 'https://shop.example/own');
-    $withDefault = $client('sk_test_abc', ['webhook_url' => 'https://shop.example/default']);
+    $withDefault = $client(KEY, ['webhook_url' => 'https://shop.example/default']);
     $payment = $withDefault->payments->create(['order_id' => 'ORD-3', 'amount_usd' => 10]);
     check('payments->create sends the client\'s webhook_url', $last()['body']['webhook_url'] === 'https://shop.example/default'
         && $payment['webhook_url'] === 'https://shop.example/default');
@@ -158,7 +177,7 @@ try {
     $payment = $payitgo->payments->selectToken('pay_1', 'XRP');
     $req = $last();
     check('payments->selectToken posts the coin with the key', $req['method'] === 'POST' && $req['path'] === '/v1/payments/pay_1/token'
-        && $req['headers']['authorization'] === 'Bearer sk_test_abc' && $req['headers']['content-type'] === 'application/json'
+        && $req['headers']['authorization'] === 'Bearer ' . KEY && $req['headers']['content-type'] === 'application/json'
         && $req['body'] === ['token' => 'XRP']);
     check('payments->selectToken returns the whole payment', $payment === $req['reply'] && $payment['token'] === 'XRP'
         && $payment['deposit_address'] === 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe' && $payment['destination_tag'] === 1042
@@ -174,11 +193,11 @@ try {
     $payment = $payitgo->payments->simulate('pay_2', 'confirmed');
     $req = $last();
     check('payments->simulate posts the outcome with the key', $req['method'] === 'POST' && $req['path'] === '/v1/payments/pay_2/simulate'
-        && $req['headers']['authorization'] === 'Bearer sk_test_abc' && $req['headers']['content-type'] === 'application/json'
+        && $req['headers']['authorization'] === 'Bearer ' . KEY && $req['headers']['content-type'] === 'application/json'
         && $req['body'] === ['outcome' => 'confirmed']);
     check('payments->simulate returns the payment with its simulation', $payment === $req['reply']
         && $payment['simulation'] === ['outcome' => 'confirmed', 'state' => 'running']
-        && $payment['deposits'][0]['simulated'] === true && str_starts_with($payment['deposits'][0]['tx_id'], 'sim_'));
+        && $payment['deposits'][0]['simulated'] === true && strlen($payment['deposits'][0]['tx_id']) === 64);
     $e = apiError(fn () => $payitgo->payments->simulate('ORD 8/1', 'confirmed'));
     check('payments->simulate escapes an order id', $last()['path'] === '/v1/payments/ORD%208%2F1/simulate');
     check('payments->simulate: a simulation still running is a 409', $e !== null && $e->status === 409
@@ -219,13 +238,13 @@ try {
     @unlink($state);
 }
 
-$withSecret = new Client('sk_test_abc', ['base_url' => 'http://x', 'webhook_secret' => SECRET]);
-check('webhooks->constructEvent uses the client\'s secret', $withSecret->webhooks->constructEvent(BODY, HEADER, null, 0)['id'] === 'evt_test_123'
-    && $withSecret->webhooks->constructEvent(BODY, $fresh)['id'] === 'evt_test_123');
-$otherSecret = new Client('sk_test_abc', ['base_url' => 'http://x', 'webhook_secret' => 'whsec_other']);
+$withSecret = new Client(KEY, ['base_url' => 'http://x', 'webhook_secret' => SECRET]);
+check('webhooks->constructEvent uses the client\'s secret', $withSecret->webhooks->constructEvent(BODY, HEADER, null, 0)['id'] === 'b8e1f80bd70ae0784c7855a4'
+    && $withSecret->webhooks->constructEvent(BODY, $fresh)['id'] === 'b8e1f80bd70ae0784c7855a4');
+$otherSecret = new Client(KEY, ['base_url' => 'http://x', 'webhook_secret' => OTHER_SECRET]);
 check('webhooks->constructEvent: an explicit secret wins', rejects(fn () => $otherSecret->webhooks->constructEvent(BODY, HEADER, null, 0))
-    && $otherSecret->webhooks->constructEvent(BODY, HEADER, SECRET, 0)['id'] === 'evt_test_123');
-$noSecret = new Client('sk_test_abc', ['base_url' => 'http://x']);
+    && $otherSecret->webhooks->constructEvent(BODY, HEADER, SECRET, 0)['id'] === 'b8e1f80bd70ae0784c7855a4');
+$noSecret = new Client(KEY, ['base_url' => 'http://x']);
 try {
     $noSecret->webhooks->constructEvent(BODY, HEADER);
     check('webhooks->constructEvent without a secret', false);

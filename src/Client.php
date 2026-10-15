@@ -20,8 +20,6 @@ final class Client
     /** Used when neither base_url nor PAYITGO_BASE_URL is set. */
     private const DEFAULT_BASE_URL = 'https://api.payitgo.co';
 
-    /** False for a test key (sk_test_…), true for a live key (sk_live_…). */
-    public readonly bool $livemode;
     public readonly Payments $payments;
     public readonly Tokens $tokens;
     public readonly Checkout $checkout;
@@ -31,9 +29,12 @@ final class Client
     private string $baseUrl;
     private int $timeout;
     private int $maxRetries;
+    /** The key's mode, once payitgo has said it (isLive()). */
+    private ?bool $live = null;
 
     /**
-     * webhook_secret is the signing secret of the key's mode (whsec_…), which
+     * $apiKey is a secret key, test or live (isLive() says which).
+     * webhook_secret is the signing secret of the key's mode, which
      * $client->webhooks->constructEvent() uses when given none; webhook_url is
      * sent as the webhook_url of every payment created without its own.
      *
@@ -41,8 +42,8 @@ final class Client
      */
     public function __construct(private readonly string $apiKey, array $options = [])
     {
-        if (!str_starts_with($apiKey, 'sk_test_') && !str_starts_with($apiKey, 'sk_live_')) {
-            throw new \InvalidArgumentException('payitgo: the API key must start with sk_test_ or sk_live_');
+        if (trim($apiKey) === '') {
+            throw new \InvalidArgumentException('payitgo: the API key is required');
         }
         $baseUrl = $options['base_url'] ?? (getenv('PAYITGO_BASE_URL') ?: self::DEFAULT_BASE_URL);
         if ($baseUrl === '') {
@@ -51,11 +52,22 @@ final class Client
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->timeout = $options['timeout'] ?? 30;
         $this->maxRetries = $options['max_retries'] ?? 2;
-        $this->livemode = str_starts_with($apiKey, 'sk_live_');
         $this->payments = new Payments($this, ($options['webhook_url'] ?? '') ?: null);
         $this->tokens = new Tokens($this);
         $this->checkout = new Checkout($this);
         $this->webhooks = new Webhooks($this, ($options['webhook_secret'] ?? '') ?: null);
+    }
+
+    /**
+     * Whether the key is a live key (its payments are real) rather than a test
+     * key. payitgo says which (GET /v1/webhook's livemode) the first time; the
+     * answer is kept for the client's life.
+     *
+     * @throws PayitgoException When payitgo refuses the key or cannot be reached.
+     */
+    public function isLive(): bool
+    {
+        return $this->live ??= (bool) $this->webhooks->get()['livemode'];
     }
 
     /**

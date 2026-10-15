@@ -17,7 +17,7 @@ require 'vendor/autoload.php';
 
 $payitgo = new \Payitgo\Client(getenv('PAYITGO_KEY'), [
     'base_url'       => getenv('PAYITGO_BASE_URL'),
-    'webhook_secret' => getenv('PAYITGO_WEBHOOK_SECRET'), // "whsec_…": see Webhooks (IPN) below
+    'webhook_secret' => getenv('PAYITGO_WEBHOOK_SECRET'), // the signing secret: see Webhooks (IPN) below
 ]);
 
 // 1. checkout.php — create a payment and send the customer to the checkout page.
@@ -50,8 +50,10 @@ if ($event['type'] === 'payment.confirmed') {
 http_response_code(200);
 ```
 
-Start with your test key (`sk_test_…`), where you [simulate](#test-mode) what the customer
-pays; switch to the live key (`sk_live_…`) when the account owner has turned live mode on.
+Start with a test key, where you [simulate](#test-mode) what the customer pays; switch to
+a live key when the account owner has turned live mode on. A key does not say its mode
+(the dashboard shows a Test or Live badge next to it): `$payitgo->isLive()` asks payitgo,
+once.
 
 ## Prices in other currencies
 
@@ -118,8 +120,8 @@ $payment = $payitgo->payments->simulate('TEST-2', 'partially_paid');
 
 Outcomes (`\Payitgo\Payments::SIMULATION_OUTCOMES`): `confirmed`, `overpaid`, `partially_paid`,
 `underpaid`, `expired`, `failed`, `wrong_asset`, `paid_late`. Simulated deposits have
-`'simulated' => true` and a `tx_id` starting with `sim_`. A live key gets `400`; a payment
-whose simulation is still running, `409`.
+`'simulated' => true`; their `tx_id` names no transaction on any chain. A live key gets
+`400`; a payment whose simulation is still running, `409`.
 
 ## Webhooks (IPN)
 
@@ -144,8 +146,8 @@ $shop = new \Payitgo\Client(getenv('PAYITGO_KEY'), ['webhook_url' => 'https://sh
 A storefront's key cannot set the account's URL (`403`): pass `webhook_url` instead.
 Payout events always go to the webhook's URL.
 
-**The signing secret.** Every notification of a mode is signed with that mode's secret
-(`whsec_…`), whichever URL it goes to. Copy it from the dashboard or read it with
+**The signing secret.** Every notification of a mode is signed with that mode's secret,
+whichever URL it goes to. Copy it from the dashboard or read it with
 `$payitgo->webhooks->get()['secret']`, and give it to the client once:
 
 ```php
@@ -205,11 +207,11 @@ $payitgo = new \Payitgo\Client($apiKey, [
     'base_url'       => 'https://api.example.com', // or PAYITGO_BASE_URL
     'timeout'        => 30,
     'max_retries'    => 2,                         // network errors, 429 and 5xx
-    'webhook_secret' => 'whsec_…',                 // for $payitgo->webhooks->constructEvent()
+    'webhook_secret' => $secret,                   // for $payitgo->webhooks->constructEvent()
     'webhook_url'    => 'https://…',               // default webhook_url of payments->create()
 ]);
 
-$payitgo->livemode;                                   // false for sk_test_ keys
+$payitgo->isLive();                                   // false for a test key (asks payitgo once)
 $payitgo->payments->create(['order_id' => …, 'amount_usd' => …, 'token' => …,
                           'description' => …, 'metadata' => […], 'customer_email' => …,
                           'success_url' => …, 'cancel_url' => …, 'webhook_url' => …, 'simulate' => …]);

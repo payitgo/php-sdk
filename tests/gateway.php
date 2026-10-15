@@ -7,6 +7,10 @@ declare(strict_types=1);
 // keeps the mode's webhook and the chosen coins in PAYITGO_GATEWAY_STATE and
 // answers the routes the way the API does.
 
+// The keys it knows besides the test key: a storefront's test key, and a live key.
+const STORE_KEY = '7fd8a9991cc9aadccefc062f0467f180cb1ab0d388ff76cdaf0b1fbbd5c80296';
+const LIVE_KEY = '9a6fd52f16ba8258c4b71ec3a7ffbe4e22ebc4ff99a1bc073fd414e0bbd4ee15';
+
 $method = $_SERVER['REQUEST_METHOD'];
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $raw = file_get_contents('php://input');
@@ -15,7 +19,7 @@ $headers = array_change_key_case(getallheaders(), CASE_LOWER);
 $stateFile = (string) getenv('PAYITGO_GATEWAY_STATE');
 $state = json_decode((string) @file_get_contents($stateFile), true) ?: [];
 $webhook = $state['webhook'] ?? [
-    'livemode' => false, 'url' => null, 'secret' => 'whsec_' . str_repeat('ab', 32),
+    'livemode' => false, 'url' => null, 'secret' => str_repeat('ab', 32),
     'created_at' => '2026-10-10T09:00:00Z', 'updated_at' => '2026-10-10T09:00:00Z',
 ];
 // The payments whose coin has been chosen: choosing again is a 409.
@@ -24,7 +28,9 @@ $chosen = $state['chosen'] ?? [];
 $simulating = $state['simulating'] ?? [];
 $body = json_decode($raw, true) ?? [];
 // A storefront's key may read and test the webhook, not change it.
-$storefront = ($headers['authorization'] ?? '') === 'Bearer sk_test_store';
+$storefront = ($headers['authorization'] ?? '') === 'Bearer ' . STORE_KEY;
+// The live key reads a live webhook (livemode true); the state keeps the test one.
+$live = ($headers['authorization'] ?? '') === 'Bearer ' . LIVE_KEY;
 $forbidden = [403, ['error' => "a storefront's key cannot change the account's webhook: set webhook_url on its payments instead"]];
 // pay_1 (order 'ORD 7/1') was created without a coin; once chosen, it has its
 // address, amount, locked rate and 15 minutes.
@@ -50,7 +56,7 @@ $simulated = fn (string $outcome): array => [
     'fees_paid_by_customer' => false, 'network_fee' => '1', 'network_fee_usd' => '0.3', 'settlement' => 'custodial',
     'received_usd' => '20', 'rate_locked' => '1',
     'deposits' => [[
-        'tx_id' => 'sim_pay_2_1791817211348_0', 'token' => 'USDT_TRC20', 'chain' => 'tron', 'amount' => '20',
+        'tx_id' => '8de0120d502929788a71a7b7cf60e5ef3c095cdbb05cd8a7ddabc0bc9ffa9582', 'token' => 'USDT_TRC20', 'chain' => 'tron', 'amount' => '20',
         'usd_value' => '20', 'counted' => true, 'status' => 'pending', 'seen_at' => '2026-10-10T12:00:05Z', 'simulated' => true,
     ]],
     'expires_at' => '2026-10-10T12:15:00Z', 'created_at' => '2026-10-10T12:00:00Z',
@@ -82,7 +88,7 @@ $created = function (array $body) use ($rates): array {
 $currency = strtoupper((string) ($body['price_currency'] ?? ''));
 
 [$status, $reply] = match (true) {
-    $path === '/v1/webhook' && $method === 'GET' => [200, ['webhook' => $webhook]],
+    $path === '/v1/webhook' && $method === 'GET' => [200, ['webhook' => $live ? array_merge($webhook, ['livemode' => true, 'url' => null]) : $webhook]],
     $path === '/v1/webhook' && $method === 'PUT' => match (true) {
         $storefront => $forbidden,
         !str_starts_with($body['url'] ?? '', 'https://') => [400, ['error' => 'url must use https']],
