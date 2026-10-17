@@ -59,8 +59,9 @@ final class Payments
      * Sets the coin of a payment created without one, when the customer chose
      * it on your own page: one of its token_options. $id is the payment's id
      * or your order id. Returns the whole payment, now with its
-     * address, amount, locked rate and a deadline 15 minutes away. The coin is
-     * chosen once: choosing again is a PayitgoException with status 409.
+     * address, amount, locked rate and a deadline 15 minutes away. Another coin
+     * changes it while the payment still has token_options; once it can no
+     * longer change, a PayitgoException with status 409.
      *
      * @return array<string, mixed>
      */

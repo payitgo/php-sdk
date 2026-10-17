@@ -117,7 +117,7 @@ $currency = strtoupper((string) ($body['price_currency'] ?? ''));
     $method === 'POST' && preg_match('#^/v1/payments/([^/]+)/token$#', $path, $m) === 1
         && in_array(rawurldecode($m[1]), ['pay_1', 'ORD 7/1'], true) => match (true) {
             ($body['token'] ?? '') === '' => [400, ['error' => 'token is required']],
-            isset($chosen['pay_1']) => [409, ['error' => 'the coin for this payment has already been chosen']],
+            isset($chosen['pay_1']) => [409, ['error' => 'the coin for this payment can no longer be changed']],
             default => [200, $chosen['pay_1'] = $withCoin($body['token'])],
         },
     $method === 'POST' && preg_match('#^/v1/payments/([^/]+)/simulate$#', $path, $m) === 1

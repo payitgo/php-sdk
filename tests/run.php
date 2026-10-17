@@ -188,7 +188,7 @@ try {
     $e = apiError(fn () => $payitgo->payments->selectToken('ORD 7/1', 'XRP'));
     check('payments->selectToken escapes an order id', $last()['path'] === '/v1/payments/ORD%207%2F1/token');
     check('payments->selectToken: a coin already chosen is a 409', $e !== null && $e->status === 409
-        && $e->getMessage() === 'the coin for this payment has already been chosen');
+        && $e->getMessage() === 'the coin for this payment can no longer be changed');
 
     $payment = $payitgo->payments->simulate('pay_2', 'confirmed');
     $req = $last();
