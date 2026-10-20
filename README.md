@@ -145,7 +145,8 @@ $shop = new \Payitgo\Client(getenv('PAYITGO_KEY'), ['webhook_url' => 'https://sh
 ```
 
 A storefront's key cannot set the account's URL (`403`): pass `webhook_url` instead.
-Payout events always go to the webhook's URL.
+A payout's events go to its own `webhook_url` (payout requests and batch rows take one), else
+to its batch's `webhook_url`, else to the webhook's URL.
 
 **The signing secret.** Every notification of a mode is signed with that mode's secret,
 whichever URL it goes to. Copy it from the dashboard or read it with
@@ -244,13 +245,15 @@ $batch = $payitgo->payouts->send();        // every valid request, as a batch; o
 // $batch['status']: 'pending_approval', 'awaiting_funds' ($batch['waiting'] says why) or 'processing'
 // (invalid requests stay in the list; up to 10,000 go per call)
 
-$payitgo->payouts->cancel($item['id']);    // out of the list; a sent one not on its way yet is canceled
+$payitgo->payouts->cancel($item['id']);    // out of the list (record kept); a sent one not on its way yet is canceled
+$payitgo->payouts->remove([$id, …]);       // several out of the list at once: a result per id, 'item' or 'error'
 $payitgo->payouts->retrieve($item['id']);  // any payment, request or batch row, by id…
-$payitgo->payouts->retrieveByReference($withdrawal->id); // …or by your reference
+$payitgo->payouts->retrieveByReference($withdrawal->id); // …or by your reference (or the latest that gave it back)
 ```
 
-`send([])` throws `\InvalidArgumentException` rather than send everything: pass no ids (or
-`null`) to send every valid request.
+`send([])` and `remove([])` throw `\InvalidArgumentException` rather than call payitgo: pass no
+ids (or `null`) to `send()` to send every valid request. Canceling or removing is safe to
+retry: a payment canceled already is returned as it is.
 
 To show a client the fee before they ask, quote up to 100 payments without keeping anything:
 
@@ -365,10 +368,13 @@ $payitgo->payoutWallets->simulateTopUp('USDT_TRC20', '1000'); // test keys only:
 Each step raises an event, signed like every other: `payout_batch.quoted`,
 `payout_batch.pending_approval`, `payout_batch.approved`, `payout_batch.rejected`,
 `payout_batch.awaiting_funds`, `payout_batch.processing`, `payout_batch.completed`,
-`payout_batch.canceled`, `payout_item.sent`, `payout_item.failed`, `payout_item.canceled`,
-`payout_item.claimed`, `payout_item.claim_expired` and `payout_wallet.withdrawn`. `data` is the
-batch, the payment or the withdrawal. A batch created with its own `webhook_url` sends its events
-there instead. Schedules made in the dashboard (a batch made again and again; its batches have
+`payout_batch.canceled`, `payout_item.processing` (a request left your list for a batch),
+`payout_item.returned` (it came back to the list; not final), `payout_item.sent`,
+`payout_item.failed`, `payout_item.canceled`, `payout_item.claimed`, `payout_item.claim_expired`,
+`payout_wallet.withdrawn` and `payout_wallet.withdrawal_failed` (with `fail_reason`; its money
+stays in the wallet). `data` is the batch, the payment or the withdrawal. A payment's events go
+to its own `webhook_url`, else to its batch's `webhook_url`, else to the webhook's URL.
+Schedules made in the dashboard (a batch made again and again; its batches have
 `'source' => 'schedule'`) send `payout_schedule.run` (`data`: the schedule) and
 `payout_schedule.funding_needed` (`data`: `['schedule' => …, 'shortfall' => [['asset' => …,
 'network' => …, 'amount' => …, 'address' => …]]]`, before a run the wallet cannot cover). The
@@ -381,10 +387,26 @@ switch ($event['type']) {
         markWithdrawalPaid($event['data']['reference'], $event['data']['tx_id']);
         break;
     case 'payout_item.failed':             // never sent: its money stays in the wallet, its reference is free again
+    case 'payout_item.canceled':           // whoever canceled it: $event['data']['cancel_reason'] says why
     case 'payout_item.claim_expired':      // a claim link never claimed: the same
         reopenWithdrawal($event['data']['released_reference']);
         break;
 }
+```
+
+**Staying in sync.** Every payment, a payout request or a batch row, ends `sent`, `failed`,
+`canceled` or `expired`, with one event each, delivered at least once: deduplicate on the
+event's `id` (the same however often it is sent). Order is not guaranteed: act on
+`$event['data']['status']` and the latest `$event['data']['updated_at']`. Replay the events you
+missed with `$payitgo->events->list(['after' => $lastEventId])`, and resync your payments with
+`$payitgo->payouts->list()` (keep its `next_cursor` for next time):
+
+```php
+$page = $payitgo->events->list(['type' => 'payout_item.*', 'after' => $lastEventId]); // oldest first
+// $page['events']: each as its webhook carried it; while $page['has_more'], read on from the last id
+
+$page = $payitgo->payouts->list(['status' => ['sent', 'failed', 'canceled', 'expired'], 'updated_since' => new \DateTimeImmutable('-1 day')]);
+// $page['items'], oldest change first; while $page['has_more'], read on with ['cursor' => $page['next_cursor']]
 ```
 
 ## API
@@ -416,15 +438,18 @@ $payitgo->webhooks->remove();                         // the webhook, 'url' => n
 $payitgo->webhooks->test();                           // the delivery of a "ping" event
 $payitgo->webhooks->constructEvent($rawBody, $signatureHeader, $secret = null, $tolerance = 300);
 \Payitgo\Webhook::constructEvent($rawBody, $signatureHeader, $secret, $tolerance = 300); // no client needed
+$payitgo->events->list(['type' => ['payout_item.*'], 'after' => …, 'created_after' => …, 'limit' => …]); // ['events' => […], 'has_more' => …]
 
 $payitgo->payouts->request(['reference' => …, 'asset' => …, 'address' => …, 'amount' => …,
-                          'tag' => …, 'name' => …, 'email' => …, 'note' => …]); // the payment, in your open list
+                          'tag' => …, 'name' => …, 'email' => …, 'note' => …, 'webhook_url' => …]); // the payment, in your open list
 $payitgo->payouts->request(['asset' => …, 'amount' => …, 'email' => …, 'claim' => true, 'claim_assets' => […]]); // a claim link
 $payitgo->payouts->retrieve($id);                     // a payment: a request or a batch row
-$payitgo->payouts->retrieveByReference($reference);
+$payitgo->payouts->retrieveByReference($reference);   // or the latest payment that gave it back
+$payitgo->payouts->list(['status' => …, 'updated_since' => …, 'cursor' => …, 'limit' => …]); // ['items' => […], 'has_more' => …, 'next_cursor' => …]
 $payitgo->payouts->inbox(['status' => …, 'limit' => …, 'offset' => …]); // ['inbox' => …, 'coverage' => …, 'items' => …, 'total' => …, …]
 $payitgo->payouts->send($ids = null);                 // the batch the valid requests went into
 $payitgo->payouts->cancel($id);                       // the payment, 'status' => 'canceled'
+$payitgo->payouts->remove([$id, …]);                  // [['id' => …, 'item' => …] or ['id' => …, 'error' => ['status' => …, 'message' => …]], …]
 $payitgo->payouts->quote(['fee_paid_by' => …, 'convert' => …, 'convert_from' => …, 'items' => [[…], …]]); // ['quote' => …, 'items' => […]], nothing kept
 $payitgo->payoutBatches->create(['reference' => …, 'name' => …, 'fee_paid_by' => …, 'webhook_url' => …,
                                'convert' => …, 'convert_from' => …, 'items' => [[…], …]]);

@@ -10,6 +10,7 @@ spl_autoload_register(function (string $class): void {
 });
 
 use Payitgo\Client;
+use Payitgo\Events;
 use Payitgo\Exception\PayitgoException;
 use Payitgo\Exception\SignatureVerificationException;
 use Payitgo\Payments;
@@ -85,12 +86,15 @@ try {
 }
 check('no livemode property: isLive() asks payitgo', !property_exists(Client::class, 'livemode'));
 check('the version is 0.6.0', Client::VERSION === '0.6.0');
-check('the payout events are listed', array_diff([
-    'payout_batch.quoted', 'payout_batch.pending_approval', 'payout_batch.approved', 'payout_batch.rejected', 'payout_batch.awaiting_funds',
-    'payout_batch.processing', 'payout_batch.completed', 'payout_batch.canceled', 'payout_item.sent', 'payout_item.failed',
-    'payout_item.canceled', 'payout_item.claimed', 'payout_item.claim_expired', 'payout_wallet.withdrawn',
-    'payout_schedule.run', 'payout_schedule.funding_needed',
-], Webhooks::EVENTS) === [] && count(Webhooks::EVENTS) === count(array_unique(Webhooks::EVENTS)));
+check('the events are listed, in the API\'s order', Webhooks::EVENTS === [
+    'payment.partially_paid', 'payment.detecting', 'payment.confirmed', 'payment.underpaid', 'payment.expired', 'payment.failed',
+    'payment.wrong_asset', 'payment.late_deposit', 'payout.approved', 'payout.rejected', 'payout.sent', 'settlement.completed',
+    'settlement.failed', 'payout_batch.quoted', 'payout_batch.pending_approval', 'payout_batch.approved', 'payout_batch.rejected',
+    'payout_batch.awaiting_funds', 'payout_batch.processing', 'payout_batch.completed', 'payout_batch.canceled',
+    'payout_item.processing', 'payout_item.returned', 'payout_item.sent', 'payout_item.failed', 'payout_item.canceled',
+    'payout_item.claimed', 'payout_item.claim_expired', 'payout_wallet.withdrawn', 'payout_wallet.withdrawal_failed',
+    'payout_schedule.run', 'payout_schedule.funding_needed', 'ping',
+]);
 $signed = function (string $body): string {
     $t = time();
     return 't=' . $t . ',v1=' . hash_hmac('sha256', $t . '.' . $body, SECRET);
@@ -116,6 +120,24 @@ check('a payout_schedule.funding_needed event decodes the schedule and its short
     && $event['data']['schedule']['last_run_at'] === null && $event['data']['schedule']['totals'][0]['items'] === 12
     && !isset($event['data']['schedule']['items'])
     && $event['data']['shortfall'][0] === ['asset' => 'USDT_TRC20', 'network' => 'Tron (TRC-20)', 'amount' => '1200', 'address' => 'TMkq7dZ3vN8xR2pB6cH9sJ4fL1wY5tGaQe']);
+
+$body = '{"id":"6e8a0c2e4b6d8f1a3c5e7b9d","type":"payout_item.returned","livemode":false,"created_at":"2026-10-20T10:05:00Z","data":{'
+    . '"id":"5c7e9a1b3d5f7a9c1e3b5d7f","batch_id":"6a1f3c8e2d9b4a7051c3e8f2","reference":"WD-92","row":3,"status":"invalid","asset":"USDT_TRC20",'
+    . '"address":"TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi","amount":"5","errors":[{"code":"below_minimum","message":"below the minimum of 10 USDT"}],'
+    . '"warnings":[],"webhook_url":"https://shop.example/withdrawals/ipn","updated_at":"2026-10-20T10:05:00Z"}}';
+$event = Webhook::constructEvent($body, $signed($body), SECRET);
+check('a payout_item.returned event decodes the payment back in the list, with its errors and webhook_url', in_array($event['type'], Webhooks::EVENTS, true)
+    && $event['data']['status'] === 'invalid' && $event['data']['errors'][0]['code'] === 'below_minimum'
+    && $event['data']['webhook_url'] === 'https://shop.example/withdrawals/ipn');
+$body = '{"id":"9c3e5a7b1d2f4a6c8e0b2d4f","type":"payout_wallet.withdrawal_failed","livemode":false,"created_at":"2026-10-20T11:05:00Z","data":{'
+    . '"id":"1d3f5a7c9e2b4d6f8a0c2e4b","merchant_id":"mch_1","livemode":false,"asset":"USDT_TRC20","chain":"tron","amount":"377.797583",'
+    . '"fee":"3.71","send_amount":"374.087583","address_id":"3e7a1c9f5b2d4e8a6c0f2b1d","address":"TWd4Kp9mR2xH7sN3vB6cJ8fL5qY1tZgEaU",'
+    . '"status":"failed","fail_reason":"the transfer could not be sent","requested_by":"9b2e4c71d8a05f3e6c1a7b24",'
+    . '"members":{"9b2e4c71d8a05f3e6c1a7b24":"owner@acme.example"},"created_at":"2026-10-20T11:02:15Z","updated_at":"2026-10-20T11:05:00Z"}}';
+$event = Webhook::constructEvent($body, $signed($body), SECRET);
+check('a payout_wallet.withdrawal_failed event decodes the withdrawal and its fail_reason', in_array($event['type'], Webhooks::EVENTS, true)
+    && $event['data']['status'] === 'failed' && $event['data']['fail_reason'] === 'the transfer could not be sent'
+    && $event['data']['amount'] === '377.797583');
 
 // The webhook (IPN), against the fake gateway in gateway.php on 127.0.0.1.
 $probe = stream_socket_server('tcp://127.0.0.1:0');
@@ -313,7 +335,11 @@ try {
     $removed = $payitgo->payouts->cancel($third['id']);
     $req = $last();
     check('payouts->cancel deletes a request from the open list', $req['method'] === 'DELETE' && $req['path'] === '/v1/payouts/' . $third['id']
-        && $req['body'] === null && $removed === $req['reply']['item'] && $removed['status'] === 'canceled' && $removed['reference'] === 'WD-79');
+        && $req['body'] === null && $removed === $req['reply']['item'] && $removed['status'] === 'canceled');
+    check('payouts->cancel: a removed request keeps its record, out of the list, its reference given back', $removed['cancel_reason'] === 'removed'
+        && $removed['released_reference'] === 'WD-79' && !isset($removed['reference']) && !isset($removed['batch_id'])
+        && $removed['canceled_by'] === 'key_1' && $removed['canceled_at'] === $removed['updated_at']
+        && $payitgo->payouts->retrieve($third['id']) === $removed);
 
     file_put_contents($log, '');
     try {
@@ -337,7 +363,11 @@ try {
         && $last()['body'] === null && $e !== null && $e->status === 400 && $e->getMessage() === 'no valid payout request to send');
     check('payouts->retrieve: a sent request is in its batch', $payitgo->payouts->retrieve('po_1')['batch_id'] === $sent['id']);
     $canceled = $payitgo->payouts->cancel('po_1');
-    check('payouts->cancel cancels a sent request', $canceled['status'] === 'canceled' && $payitgo->payouts->retrieve('po_1')['status'] === 'canceled');
+    check('payouts->cancel cancels a sent request', $canceled['status'] === 'canceled' && $canceled['cancel_reason'] === 'canceled'
+        && $canceled['batch_id'] === $sent['id'] && $canceled['released_reference'] === 'WD 77/a'
+        && $payitgo->payouts->retrieve('po_1')['status'] === 'canceled');
+    check('payouts->cancel is safe to retry: a canceled payment is answered as it is', $payitgo->payouts->cancel('po_1') === $canceled
+        && $last()['status'] === 200);
 
     $quote = $payitgo->payouts->quote(['fee_paid_by' => 'recipient', 'items' => [
         ['asset' => 'USDT_TRC20', 'address' => 'TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi', 'amount' => 120],
@@ -509,6 +539,123 @@ try {
     $e = apiError(fn () => $live->payoutWallets->simulateTopUp('USDT_TRC20', '10'));
     check('payoutWallets->simulateTopUp: a live key is a 400', $e !== null && $e->status === 400
         && $e->getMessage() === 'only a test wallet is topped up on paper: use a test key');
+
+    // Removing several requests at once.
+    $a = $payitgo->payouts->request(['reference' => 'WD-80', 'asset' => 'USDT_TRC20', 'address' => 'TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi', 'amount' => '15',
+        'webhook_url' => 'https://shop.example/withdrawals/ipn']);
+    check('payouts->request sends its webhook_url', $last()['body']['webhook_url'] === 'https://shop.example/withdrawals/ipn'
+        && $a['webhook_url'] === 'https://shop.example/withdrawals/ipn');
+    $b = $payitgo->payouts->request(['reference' => 'WD-81', 'asset' => 'USDT_TRC20', 'address' => 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7', 'amount' => '25']);
+    $away = $payitgo->payouts->send([$b['id']]);
+    file_put_contents($log, '');
+    try {
+        $payitgo->payouts->remove([]);
+        check('payouts->remove([]) refuses an empty list of ids', false);
+    } catch (InvalidArgumentException $e) {
+        check('payouts->remove([]) refuses an empty list of ids, sending nothing', file_get_contents($log) === ''
+            && $e->getMessage() === 'payitgo: no ids given: pass the ids of the payout requests to remove');
+    }
+    $results = $payitgo->payouts->remove([$a['id'], $a['id'], 'po_1', $third['id'], 'no such', $b['id']]);
+    $req = $last();
+    check('payouts->remove posts the ids as given', $req['method'] === 'POST' && $req['path'] === '/v1/payouts/remove' && $req['query'] === ''
+        && $req['headers']['authorization'] === 'Bearer ' . KEY && $req['headers']['content-type'] === 'application/json'
+        && $req['body'] === ['ids' => [$a['id'], $a['id'], 'po_1', $third['id'], 'no such', $b['id']]]);
+    check('payouts->remove returns a result per distinct id, in the order given', $results === $req['reply']['results'] && array_is_list($results)
+        && array_column($results, 'id') === [$a['id'], 'po_1', $third['id'], 'no such', $b['id']]);
+    check('payouts->remove: a request in the list is removed, its record kept', $results[0]['item']['status'] === 'canceled'
+        && $results[0]['item']['cancel_reason'] === 'removed' && $results[0]['item']['released_reference'] === 'WD-80'
+        && !isset($results[0]['item']['batch_id']) && !isset($results[0]['item']['reference']) && !isset($results[0]['error'])
+        && $payitgo->payouts->retrieve($a['id']) === $results[0]['item']);
+    check('payouts->remove: a request removed already is answered as it is', $results[2]['item'] === $removed && !isset($results[2]['error']));
+    check('payouts->remove: an unknown id is a 404 result', $results[3]['error'] === ['status' => 404, 'message' => 'not found'] && !isset($results[3]['item']));
+    check('payouts->remove: a payment canceled otherwise, or ended, is a 409 result', $results[1]['error'] === ['status' => 409, 'message' => 'the payment is canceled']);
+    check('payouts->remove: a request sent from the list already is a 409 result', $results[4]['error'] === ['status' => 409,
+        'message' => 'not in your list of payout requests (sent already): cancel it with DELETE /v1/payouts/' . $b['id']]
+        && $payitgo->payouts->retrieve($b['id'])['batch_id'] === $away['id']);
+    $again = $payitgo->payouts->remove([$a['id']]);
+    check('payouts->remove is safe to retry', $again === [['id' => $a['id'], 'item' => $results[0]['item']]]);
+    $e = apiError(fn () => $store->payouts->remove([$a['id']]));
+    check('payouts->remove: a key without payouts is a 403', $e !== null && $e->status === 403);
+
+    // A reference given back: read by it, then used again.
+    $got = $payitgo->payouts->retrieveByReference('WD-80');
+    check('payouts->retrieveByReference falls back to the latest payment that gave it back', $last()['query'] === 'reference=WD-80'
+        && $got === $results[0]['item']);
+    $renewed = $payitgo->payouts->request(['reference' => 'WD-80', 'asset' => 'USDT_TRC20', 'address' => 'TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi', 'amount' => '15']);
+    check('a reference given back makes a new payment, read by it from then on', $last()['status'] === 201 && $renewed['id'] !== $a['id']
+        && $renewed['reference'] === 'WD-80' && $payitgo->payouts->retrieveByReference('WD-80') === $renewed);
+    file_put_contents($log, '');
+    try {
+        $payitgo->payouts->retrieveByReference('');
+        check('payouts->retrieveByReference(\'\') refuses an empty reference', false);
+    } catch (InvalidArgumentException $e) {
+        check('payouts->retrieveByReference(\'\') refuses an empty reference, sending nothing', file_get_contents($log) === ''
+            && $e->getMessage() === 'payitgo: reference is required');
+    }
+
+    // Listing every payment, for resync.
+    $list = $payitgo->payouts->list(['status' => ['canceled', 'ready'], 'updated_since' => new DateTimeImmutable('2026-10-20 11:20:00', new DateTimeZone('+02:00')),
+        'limit' => 2, 'cursor' => null]);
+    $req = $last();
+    check('payouts->list sends the statuses comma-separated and updated_since as RFC 3339 in UTC', $req['method'] === 'GET'
+        && $req['path'] === '/v1/payouts' && $req['body'] === null && $req['headers']['authorization'] === 'Bearer ' . KEY
+        && $req['query'] === 'status=canceled%2Cready&updated_since=2026-10-20T09%3A20%3A00Z&limit=2');
+    check('payouts->list returns the page, oldest change first', $list === $req['reply'] && array_keys($list) === ['items', 'has_more', 'next_cursor']
+        && array_column($list['items'], 'id') === [$third['id'], 'po_1'] && $list['has_more'] === true && $list['next_cursor'] !== '');
+    $next = $payitgo->payouts->list(['status' => 'canceled,ready', 'cursor' => $list['next_cursor'], 'limit' => 2]);
+    check('payouts->list reads on from next_cursor', $last()['query'] === 'status=canceled%2Cready&cursor=' . urlencode($list['next_cursor']) . '&limit=2'
+        && array_column($next['items'], 'id') === [$b['id'], $a['id']] && $next['has_more'] === false && isset($next['next_cursor']));
+    $none = $payitgo->payouts->list(['cursor' => $next['next_cursor']]);
+    check('payouts->list: nothing changed since, an empty page without next_cursor', $none === ['items' => [], 'has_more' => false]);
+    $all = $payitgo->payouts->list();
+    check('payouts->list without filters lists every payment, removed ones too', $last()['query'] === '' && $all['has_more'] === false
+        && in_array($third['id'], array_column($all['items'], 'id'), true) && end($all['items'])['id'] === $a['id']);
+    $since = $payitgo->payouts->list(['updated_since' => '2026-10-20T09:20:05Z']);
+    check('payouts->list sends a string updated_since as it is', $last()['query'] === 'updated_since=2026-10-20T09%3A20%3A05Z'
+        && array_column($since['items'], 'id') === [$a['id']]);
+    $payitgo->payouts->list(['updated_since' => new DateTime('2026-10-20T09:20:04.5Z')]);
+    check('payouts->list keeps the fraction of a second', $last()['query'] === 'updated_since=2026-10-20T09%3A20%3A04.500000Z');
+    $e = apiError(fn () => $payitgo->payouts->list(['updated_since' => 'yesterday']));
+    check('payouts->list: an updated_since that is no RFC 3339 time is a 400', $e !== null && $e->status === 400
+        && $e->getMessage() === 'updated_since must be an RFC 3339 time, such as 2026-10-20T09:00:00Z');
+    $e = apiError(fn () => $payitgo->payouts->list(['cursor' => 'nope']));
+    check('payouts->list: a cursor it did not give is a 400', $e !== null && $e->status === 400 && $e->getMessage() === 'cursor is not one this API gave');
+    $e = apiError(fn () => $payitgo->payouts->list(['limit' => 500]));
+    check('payouts->list: a limit over 200 is a 400', $e !== null && $e->status === 400 && $e->getMessage() === 'limit must be 1 to 200');
+
+    // Replaying events.
+    check('the client has events', $payitgo->events instanceof Events);
+    $replayed = $payitgo->events->list();
+    $req = $last();
+    check('events->list reads the mode\'s events with the key', $req['method'] === 'GET' && $req['path'] === '/v1/events' && $req['query'] === ''
+        && $req['body'] === null && $req['headers']['authorization'] === 'Bearer ' . KEY);
+    check('events->list returns the events, oldest first, as their webhooks carried them', $replayed === $req['reply']
+        && array_keys($replayed) === ['events', 'has_more'] && $replayed['has_more'] === false
+        && array_column($replayed['events'], 'type') === ['payout_item.canceled', 'payout_item.processing', 'payout_item.canceled',
+            'payout_item.processing', 'payout_item.canceled']
+        && array_keys($replayed['events'][0]) === ['id', 'type', 'livemode', 'created_at', 'data']
+        && array_diff(array_column($replayed['events'], 'type'), Webhooks::EVENTS) === []);
+    check('events->list: each event carries the payment as it was then', $replayed['events'][0]['data']['id'] === $third['id']
+        && $replayed['events'][0]['data']['cancel_reason'] === 'removed' && $replayed['events'][0]['livemode'] === false
+        && $replayed['events'][1]['data']['id'] === 'po_1' && $replayed['events'][1]['data']['batch_id'] === $sent['id']
+        && $replayed['events'][1]['data']['status'] === 'ready'
+        && $replayed['events'][2]['data']['cancel_reason'] === 'canceled' && $replayed['events'][2]['data']['canceled_by'] === 'key_1'
+        && $replayed['events'][4]['data'] === $results[0]['item'] && $replayed['events'][4]['created_at'] === $results[0]['item']['canceled_at']);
+    $page = $payitgo->events->list(['type' => ['payout_item.canceled', 'payment.*'], 'after' => $replayed['events'][0]['id'], 'limit' => 1]);
+    check('events->list sends the types comma-separated, after and limit', $last()['query'] === 'type=payout_item.canceled%2Cpayment.%2A&after='
+        . $replayed['events'][0]['id'] . '&limit=1' && $page['events'] === [$replayed['events'][2]] && $page['has_more'] === true);
+    $page = $payitgo->events->list(['type' => 'payout_item.*', 'created_after' => new DateTimeImmutable('2026-10-20 11:20:03', new DateTimeZone('+02:00')),
+        'after' => '']);
+    check('events->list sends created_after as RFC 3339 in UTC', $last()['query'] === 'type=payout_item.%2A&created_after=2026-10-20T09%3A20%3A03Z'
+        && $page['events'] === array_slice($replayed['events'], 3) && $page['has_more'] === false);
+    $e = apiError(fn () => $store->events->list());
+    check('events->list: a storefront\'s key is a 403', $e !== null && $e->status === 403
+        && $e->getMessage() === "a storefront's key cannot read the account's events: use an account key");
+    $e = apiError(fn () => $payitgo->events->list(['type' => 'Payout Item']));
+    check('events->list: a type that is no event type is a 400', $e !== null && $e->status === 400
+        && $e->getMessage() === 'type must be event types, such as payout_item.sent or payout_item.*');
+    $e = apiError(fn () => $payitgo->events->list(['after' => 'evt_99']));
+    check('events->list: an unknown after is a 400', $e !== null && $e->status === 400 && $e->getMessage() === 'after is not an event of this mode');
 } catch (Throwable $e) {
     check('webhook: ' . $e::class . ': ' . $e->getMessage(), false);
 } finally {

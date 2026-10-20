@@ -20,10 +20,12 @@ final class PayoutBatches
      * Makes a batch of 1 to 1000 payments, checked and priced: 'quoted'
      * (or 'validating' past 100 payments, payout_batch.quoted following).
      * Each item: asset, address, amount (a decimal string; a number is sent
-     * as a string), and optionally reference, tag, name, email, note; or a
-     * claim link (claim => true or claim_assets, and no address), as
-     * payouts->request() takes them. Optional: reference (your id for the batch: send one),
-     * name, fee_paid_by ('merchant' or 'recipient'), webhook_url, convert
+     * as a string), and optionally reference, tag, name, email, note,
+     * webhook_url; or a claim link (claim => true or claim_assets, and no
+     * address), as payouts->request() takes them. Optional: reference (your
+     * id for the batch: send one), name, fee_paid_by ('merchant' or
+     * 'recipient'), webhook_url (the batch's events, and its payments' that
+     * have none of their own, go there instead of your webhook's URL), convert
      * ('convert': every payment in another coin than convert_from is paid
      * from convert_from, converted on its way; 'same_network': each from
      * the wallet's own coin) and convert_from (default: your payout

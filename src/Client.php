@@ -28,6 +28,8 @@ final class Client
     public readonly Checkout $checkout;
     /** The key's mode's webhook, and constructEvent to verify its notifications. */
     public readonly Webhooks $webhooks;
+    /** The key's mode's events, as their webhooks carried them: replay the ones you missed. */
+    public readonly Events $events;
     /** Payout requests, one by one, and any payment read by its id or reference. */
     public readonly Payouts $payouts;
     /** Payout batches: a whole list of payments at once. */
@@ -65,6 +67,7 @@ final class Client
         $this->tokens = new Tokens($this);
         $this->checkout = new Checkout($this);
         $this->webhooks = new Webhooks($this, ($options['webhook_secret'] ?? '') ?: null);
+        $this->events = new Events($this);
         $this->payouts = new Payouts($this);
         $this->payoutBatches = new PayoutBatches($this);
         $this->payoutWallets = new PayoutWallets($this);

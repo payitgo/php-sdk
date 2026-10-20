@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 // A fake gateway for tests/run.php, served by PHP's built-in server on
 // 127.0.0.1: it records each request and its reply in PAYITGO_GATEWAY_LOG,
-// keeps the mode's webhook, the chosen coins and the payouts in
+// keeps the mode's webhook, the chosen coins, the payouts and their events in
 // PAYITGO_GATEWAY_STATE and answers the routes the way the API does.
 
 // The keys it knows besides the test key: a storefront's test key, and a live key.
@@ -98,6 +98,18 @@ $seq = $state['seq'] ?? 0;
 $next = function (string $prefix) use (&$seq): string {
     return $prefix . ++$seq;
 };
+// The mode's events, oldest first, as GET /v1/events replays them; each
+// change moves the clock (tick) a second on from 09:20:00.
+$events = $state['events'] ?? [];
+$tick = $state['tick'] ?? 0;
+$at = function () use (&$tick): string {
+    return gmdate('Y-m-d\TH:i:s\Z', strtotime('2026-10-20T09:20:00Z') + ++$tick);
+};
+$announce = function (string $type, array $data) use (&$events): void {
+    $events[] = ['id' => 'evt_' . (count($events) + 1), 'type' => $type, 'livemode' => false, 'created_at' => $data['updated_at'], 'data' => $data];
+};
+// An RFC 3339 time, as the API reads updated_since and created_after.
+$rfc3339 = fn (string $v): bool => preg_match('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/', $v) === 1;
 parse_str($_SERVER['QUERY_STRING'] ?? '', $query);
 $noPayouts = [403, ['error' => 'this api key cannot make payouts: turn payouts on for it in the dashboard']];
 $notFound = [404, ['error' => 'not found']];
@@ -136,6 +148,9 @@ $priced = function (array $in, string $id, string $batchId, int $row, array $rul
     if ($item['reference'] === '') {
         unset($item['reference']);
     }
+    if (($in['webhook_url'] ?? '') !== '') {
+        $item['webhook_url'] = $in['webhook_url']; // its events go there
+    }
     $errors = [];
     if ($claim) {
         $item['claim'] = array_filter(['email' => (string) ($in['email'] ?? '')]) + [
@@ -169,7 +184,7 @@ $priced = function (array $in, string $id, string $batchId, int $row, array $rul
 };
 // A batch's counts and totals, from its payments.
 $batchOf = function (array $batch) use (&$payouts): array {
-    $items = array_values(array_filter($payouts, fn ($it) => $it['batch_id'] === $batch['id']));
+    $items = array_values(array_filter($payouts, fn ($it) => ($it['batch_id'] ?? '') === $batch['id']));
     $counts = ['total' => count($items), 'invalid' => 0, 'ready' => 0, 'cooling' => 0, 'queued' => 0, 'sending' => 0, 'sent' => 0, 'failed' => 0, 'canceled' => 0,
         'claimable' => 0, 'expired' => 0];
     $debit = 0.0;
@@ -192,16 +207,72 @@ $newBatch = fn (string $id, array $fields): array => array_merge([
 ], $fields);
 $batches['inbox'] ??= $newBatch('inbox', ['name' => 'Payout requests', 'source' => 'requests', 'created_by' => 'requests', 'by_api_key' => false,
     'inbox' => true, 'open' => true]);
-$byReference = function (string $ref) use (&$payouts): ?array {
+$withStatus = fn (array $items): array => isset($query['status'])
+    ? array_values(array_filter($items, fn ($it) => in_array($it['status'], explode(',', $query['status']), true)))
+    : array_values($items);
+// The payment carrying a reference; read by it, else the latest that gave it back.
+$carrying = function (string $ref) use (&$payouts): ?array {
     return array_values(array_filter($payouts, fn ($it) => ($it['reference'] ?? '') === $ref))[0] ?? null;
+};
+$byReference = function (string $ref) use (&$payouts, $carrying): ?array {
+    $released = array_values(array_filter($payouts, fn ($it) => ($it['released_reference'] ?? '') === $ref));
+    return $carrying($ref) ?? ($released === [] ? null : end($released));
+};
+// A payment canceled by the key: a request still in the list is removed
+// (its record kept, out of the list), any other canceled alone. Its
+// reference is given back, and payout_item.canceled says so.
+$cancel = function (string $id) use (&$payouts, $at, $announce): array {
+    $it = $payouts[$id];
+    $removed = ($it['batch_id'] ?? '') === 'inbox';
+    $now = $at();
+    $it = array_merge($it, ['status' => 'canceled', 'cancel_reason' => $removed ? 'removed' : 'canceled',
+        'canceled_by' => 'key_1', 'canceled_at' => $now, 'updated_at' => $now]);
+    if (isset($it['reference'])) {
+        $it['released_reference'] = $it['reference'];
+        unset($it['reference']);
+    }
+    if ($removed) {
+        unset($it['batch_id']);
+    }
+    $announce('payout_item.canceled', $payouts[$id] = $it);
+    return $it;
+};
+// GET /v1/payouts without a reference: the mode's payments, oldest change
+// first; a cursor is the last change and id of the page before.
+$listPayouts = function () use ($query, $withStatus, $rfc3339, &$payouts): array {
+    $since = $query['updated_since'] ?? '';
+    if ($since !== '' && !$rfc3339($since)) {
+        return [400, ['error' => 'updated_since must be an RFC 3339 time, such as 2026-10-20T09:00:00Z']];
+    }
+    $limit = (int) ($query['limit'] ?? 0);
+    if ($limit < 0 || $limit > 200) {
+        return [400, ['error' => 'limit must be 1 to 200']];
+    }
+    $after = null;
+    if (($query['cursor'] ?? '') !== '') {
+        $after = explode('|', (string) base64_decode($query['cursor'], true), 2);
+        if (count($after) !== 2 || strtotime($after[0]) === false) {
+            return [400, ['error' => 'cursor is not one this API gave']];
+        }
+        $after[0] = strtotime($after[0]);
+    }
+    $key = fn (array $it): array => [strtotime($it['updated_at']), $it['id']];
+    $items = $withStatus($payouts);
+    usort($items, fn ($a, $b) => $key($a) <=> $key($b));
+    $items = array_values(array_filter($items, fn ($it) => ($since === '' || strtotime($it['updated_at']) >= strtotime($since))
+        && ($after === null || $key($it) > $after)));
+    $listed = array_slice($items, 0, $limit ?: 50);
+    $reply = ['items' => $listed, 'has_more' => count($items) > count($listed)];
+    if ($listed !== []) {
+        $last = $listed[count($listed) - 1];
+        $reply['next_cursor'] = base64_encode($last['updated_at'] . '|' . $last['id']);
+    }
+    return [200, $reply];
 };
 $page = fn (array $list): array => [
     'list' => array_slice($list, (int) ($query['offset'] ?? 0), (int) ($query['limit'] ?? 50)),
     'limit' => (int) ($query['limit'] ?? 50), 'offset' => (int) ($query['offset'] ?? 0),
 ];
-$withStatus = fn (array $items): array => isset($query['status'])
-    ? array_values(array_filter($items, fn ($it) => in_array($it['status'], explode(',', $query['status']), true)))
-    : array_values($items);
 $wallets = function () use (&$balances): array {
     return [
     ['chain' => 'tron', 'network' => 'Tron', 'address' => 'TMkq7dZ3vN8xR2pB6cH9sJ4fL1wY5tGaQe', 'livemode' => false, 'assets' => [
@@ -225,30 +296,51 @@ $ruleOf = function (array $body) use ($coins): array {
     };
 };
 $payoutRoute = function () use (
-    $method, $path, $body, $query, $storefront, $live, $noPayouts, $notFound, $priced, $batchOf, $newBatch, $byReference, $page,
-    $withStatus, $wallets, $next, $ruleOf, &$payouts, &$batches, &$balances,
+    $method, $path, $body, $query, $storefront, $live, $noPayouts, $notFound, $priced, $batchOf, $newBatch, $carrying, $byReference, $page,
+    $withStatus, $wallets, $next, $ruleOf, $at, $announce, $cancel, $listPayouts, &$payouts, &$batches, &$balances,
 ): ?array {
     switch (true) {
         case $path === '/v1/payouts' && $method === 'POST':
             if ($storefront) {
                 return $noPayouts;
             }
-            if (($body['reference'] ?? '') !== '' && ($it = $byReference($body['reference'])) !== null) {
+            if (($body['reference'] ?? '') !== '' && ($it = $carrying($body['reference'])) !== null) {
                 return [200, ['item' => $it]];
             }
             $id = $next('po_');
-            $rows = count(array_filter($payouts, fn ($it) => $it['batch_id'] === 'inbox'));
+            $rows = count(array_filter($payouts, fn ($it) => ($it['batch_id'] ?? '') === 'inbox'));
             $payouts[$id] = $priced($body, $id, 'inbox', $rows + 1);
             return [201, ['item' => $payouts[$id]]];
         case $path === '/v1/payouts' && $method === 'GET':
             if (($query['reference'] ?? '') === '') {
-                return [400, ['error' => 'reference is required']];
+                return $listPayouts();
             }
             $it = $byReference($query['reference']);
             return $it === null ? $notFound : [200, ['item' => $it]];
+        case $path === '/v1/payouts/remove' && $method === 'POST':
+            if ($storefront) {
+                return $noPayouts;
+            }
+            $ids = array_values(array_unique($body['ids'] ?? []));
+            if (count($ids) < 1 || count($ids) > 1000) {
+                return [400, ['error' => 'remove between 1 and 1000 payout requests at a time']];
+            }
+            $results = [];
+            foreach ($ids as $id) {
+                $it = $payouts[$id] ?? null;
+                $results[] = ['id' => $id] + match (true) {
+                    $it === null => ['error' => ['status' => 404, 'message' => 'not found']],
+                    ($it['cancel_reason'] ?? '') === 'removed' => ['item' => $it], // removed already: no second event
+                    in_array($it['status'], ['sent', 'failed', 'expired', 'canceled'], true) => ['error' => ['status' => 409, 'message' => 'the payment is ' . $it['status']]],
+                    ($it['batch_id'] ?? '') !== 'inbox' => ['error' => ['status' => 409,
+                        'message' => 'not in your list of payout requests (sent already): cancel it with DELETE /v1/payouts/' . $id]],
+                    default => ['item' => $cancel($id)],
+                };
+            }
+            return [200, ['results' => $results]];
         case $path === '/v1/payouts/inbox' && $method === 'GET':
             $inbox = $batchOf($batches['inbox']);
-            $items = $withStatus(array_filter($payouts, fn ($it) => $it['batch_id'] === 'inbox'));
+            $items = $withStatus(array_filter($payouts, fn ($it) => ($it['batch_id'] ?? '') === 'inbox'));
             $p = $page($items);
             $coverage = $inbox['totals'] === [] ? [] : [[
                 'asset' => 'USDT_TRC20', 'ticker' => 'USDT', 'network' => 'Tron (TRC-20)', 'needed' => $inbox['total_usd'], 'spendable' => '0',
@@ -259,7 +351,7 @@ $payoutRoute = function () use (
             if ($storefront) {
                 return $noPayouts;
             }
-            $ready = array_keys(array_filter($payouts, fn ($it) => $it['batch_id'] === 'inbox' && $it['status'] === 'ready'));
+            $ready = array_keys(array_filter($payouts, fn ($it) => ($it['batch_id'] ?? '') === 'inbox' && $it['status'] === 'ready'));
             foreach ($body['ids'] ?? [] as $want) {
                 if (!in_array($want, $ready, true)) {
                     return [400, ['error' => 'payout request ' . $want . ' is not a valid request waiting in your list']];
@@ -270,8 +362,10 @@ $payoutRoute = function () use (
                 return [400, ['error' => 'no valid payout request to send']];
             }
             $id = $next('pb_');
+            $now = $at();
             foreach ($move as $row => $item) {
-                $payouts[$item] = array_merge($payouts[$item], ['batch_id' => $id, 'row' => $row + 1]);
+                $payouts[$item] = array_merge($payouts[$item], ['batch_id' => $id, 'row' => $row + 1, 'updated_at' => $now]);
+                $announce('payout_item.processing', $payouts[$item]); // out of the list, into its batch
             }
             $batches[$id] = $newBatch($id, ['name' => 'Payout requests of 20 Oct 2026 09:20 UTC', 'source' => 'requests', 'inbox' => true,
                 'status' => 'awaiting_funds', 'submitted_by' => 'key_1', 'submitted_at' => '2026-10-20T09:20:00Z']);
@@ -364,13 +458,11 @@ $payoutRoute = function () use (
             if ($storefront) {
                 return $noPayouts;
             }
-            $it = array_merge($payouts[$id], ['status' => 'canceled']);
-            if ($it['batch_id'] === 'inbox') {
-                unset($payouts[$id]); // removed from the open list
-            } else {
-                $payouts[$id] = $it;
-            }
-            return [200, ['item' => $it]];
+            return match ($payouts[$id]['status']) {
+                'canceled' => [200, ['item' => $payouts[$id]]], // canceled already: answered as it is
+                'sent', 'failed', 'expired' => [409, ['error' => 'the payment is ' . $payouts[$id]['status']]],
+                default => [200, ['item' => $cancel($id)]],
+            };
         }
     }
     if (preg_match('#^/v1/payout-batches/([^/]+)(/items|/quote|/submit|/cancel)?$#', $path, $m) === 1) {
@@ -388,14 +480,14 @@ $payoutRoute = function () use (
             case 'GET ':
                 return [200, ['batch' => $batchOf($batch)]];
             case 'GET /items':
-                $items = $withStatus(array_filter($payouts, fn ($it) => $it['batch_id'] === $id));
+                $items = $withStatus(array_filter($payouts, fn ($it) => ($it['batch_id'] ?? '') === $id));
                 $p = $page($items);
                 return [200, ['items' => $p['list'], 'total' => count($items), 'limit' => $p['limit'], 'offset' => $p['offset']]];
             case 'POST /items':
                 if ($submitted) {
                     return [409, ['error' => 'a submitted batch cannot change: cancel it and make another']];
                 }
-                $last = count(array_filter($payouts, fn ($it) => $it['batch_id'] === $id));
+                $last = count(array_filter($payouts, fn ($it) => ($it['batch_id'] ?? '') === $id));
                 foreach (array_values($body['items'] ?? []) as $row => $in) {
                     $item = $next('po_');
                     $payouts[$item] = $priced($in, $item, $id, $last + $row + 1, $batch);
@@ -426,6 +518,42 @@ $payoutRoute = function () use (
         }
     }
     return null;
+};
+// GET /v1/events: the mode's events, oldest first, of types (exact, or a
+// family: payout_item.*), after an event or a time.
+$replay = function () use ($query, $storefront, $rfc3339, &$events): array {
+    if ($storefront) {
+        return [403, ['error' => "a storefront's key cannot read the account's events: use an account key"]];
+    }
+    $types = ($query['type'] ?? '') === '' ? [] : array_map('trim', explode(',', $query['type']));
+    foreach ($types as $type) {
+        if (preg_match('/^[a-z_]+(\.[a-z_]+|\.\*)?$/', $type) !== 1) {
+            return [400, ['error' => 'type must be event types, such as payout_item.sent or payout_item.*']];
+        }
+    }
+    $list = $events;
+    if (($query['after'] ?? '') !== '') {
+        $pos = array_search($query['after'], array_column($events, 'id'), true);
+        if ($pos === false) {
+            return [400, ['error' => 'after is not an event of this mode']];
+        }
+        $list = array_slice($events, $pos + 1);
+    } elseif (($query['created_after'] ?? '') !== '') {
+        if (!$rfc3339($query['created_after'])) {
+            return [400, ['error' => 'created_after must be an RFC 3339 time, such as 2026-10-20T09:00:00Z']];
+        }
+        $list = array_filter($list, fn ($e) => strtotime($e['created_at']) > strtotime($query['created_after']));
+    }
+    $limit = 100;
+    if (($query['limit'] ?? '') !== '') {
+        $limit = (int) $query['limit'];
+        if ($limit < 1 || $limit > 200) {
+            return [400, ['error' => 'limit must be 1 to 200']];
+        }
+    }
+    $list = array_values(array_filter($list, fn ($e) => $types === [] || array_filter($types, fn ($t) => $t === $e['type']
+        || (str_ends_with($t, '.*') && str_starts_with($e['type'], substr($t, 0, -1)))) !== []));
+    return [200, ['events' => array_slice($list, 0, $limit), 'has_more' => count($list) > $limit]];
 };
 
 [$status, $reply] = match (true) {
@@ -467,10 +595,11 @@ $payoutRoute = function () use (
             isset($simulating['pay_2']) => [409, ['error' => 'a simulation is already running for this payment']],
             default => [200, $simulating['pay_2'] = $simulated($body['outcome'])],
         },
+    $path === '/v1/events' && $method === 'GET' => $replay(),
     default => $payoutRoute() ?? [404, ['error' => 'not found']],
 };
 file_put_contents($stateFile, json_encode(['webhook' => $webhook, 'chosen' => $chosen, 'simulating' => $simulating,
-    'payouts' => $payouts, 'batches' => $batches, 'balances' => $balances, 'seq' => $seq]));
+    'payouts' => $payouts, 'batches' => $batches, 'balances' => $balances, 'seq' => $seq, 'events' => $events, 'tick' => $tick]));
 file_put_contents((string) getenv('PAYITGO_GATEWAY_LOG'), json_encode([
     'status' => $status,
     'method' => $method,

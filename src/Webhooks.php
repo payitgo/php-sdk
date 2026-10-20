@@ -12,15 +12,19 @@ use Payitgo\Exception\SignatureVerificationException;
  */
 final class Webhooks
 {
-    /** The events payitgo sends. A test ($client->webhooks->test()) sends "ping". */
+    /**
+     * The events payitgo sends ($client->events->list() replays them). A
+     * test ($client->webhooks->test()) sends "ping".
+     */
     public const EVENTS = [
         'payment.partially_paid', 'payment.detecting', 'payment.confirmed', 'payment.underpaid',
         'payment.expired', 'payment.failed', 'payment.wrong_asset', 'payment.late_deposit',
         'payout.approved', 'payout.rejected', 'payout.sent', 'settlement.completed', 'settlement.failed',
         'payout_batch.quoted', 'payout_batch.pending_approval', 'payout_batch.approved', 'payout_batch.rejected',
         'payout_batch.awaiting_funds', 'payout_batch.processing', 'payout_batch.completed', 'payout_batch.canceled',
-        'payout_item.sent', 'payout_item.failed', 'payout_item.canceled', 'payout_item.claimed', 'payout_item.claim_expired',
-        'payout_wallet.withdrawn', 'payout_schedule.run', 'payout_schedule.funding_needed',
+        'payout_item.processing', 'payout_item.returned', 'payout_item.sent', 'payout_item.failed', 'payout_item.canceled',
+        'payout_item.claimed', 'payout_item.claim_expired',
+        'payout_wallet.withdrawn', 'payout_wallet.withdrawal_failed', 'payout_schedule.run', 'payout_schedule.funding_needed',
         'ping',
     ];
 
