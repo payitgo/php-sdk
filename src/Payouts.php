@@ -26,7 +26,8 @@ final class Payouts
      * tag, name, email, note. A claim link instead (claim => true, or
      * claim_assets: the other coins the recipient may choose) has no
      * address: its recipient chooses the coin and the address. With an
-     * email the link is emailed; without, you share ['claim']['url']. An
+     * email the link is emailed; without, you share ['claim']['url'], and
+     * give ['claim']['pin'] another way (the recipient enters it). An
      * email alone makes no claim link: a missing address is invalid.
      * Returns the payment: 'ready' with its fees, or 'invalid' with
      * 'errors' saying why (kept, never sent).
