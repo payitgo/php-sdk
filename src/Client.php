@@ -12,10 +12,13 @@ use Payitgo\Exception\PayitgoException;
  *     $payitgo = new \Payitgo\Client(getenv('PAYITGO_KEY'), ['base_url' => 'https://api.example.com']);
  *     $payment = $payitgo->payments->create(['order_id' => 'ORD-1001', 'amount_usd' => 10, 'token' => 'USDT_TRC20']);
  *     // send the customer to $payment['checkout_url']; fulfil on the payment.confirmed webhook
+ *
+ *     $payout = $payitgo->payouts->request(['reference' => 'WD-77', 'asset' => 'USDT_TRC20', 'address' => $address, 'amount' => '120']);
+ *     // a client's payout request, checked and priced; $payitgo->payouts->send() sends the valid ones
  */
 final class Client
 {
-    public const VERSION = '0.5.0';
+    public const VERSION = '0.6.0';
 
     /** Used when neither base_url nor PAYITGO_BASE_URL is set. */
     private const DEFAULT_BASE_URL = 'https://api.payitgo.co';
@@ -25,6 +28,12 @@ final class Client
     public readonly Checkout $checkout;
     /** The key's mode's webhook, and constructEvent to verify its notifications. */
     public readonly Webhooks $webhooks;
+    /** Payout requests, one by one, and any payment read by its id or reference. */
+    public readonly Payouts $payouts;
+    /** Payout batches: a whole list of payments at once. */
+    public readonly PayoutBatches $payoutBatches;
+    /** The payout wallet the payouts are paid from. */
+    public readonly PayoutWallets $payoutWallets;
 
     private string $baseUrl;
     private int $timeout;
@@ -56,6 +65,9 @@ final class Client
         $this->tokens = new Tokens($this);
         $this->checkout = new Checkout($this);
         $this->webhooks = new Webhooks($this, ($options['webhook_secret'] ?? '') ?: null);
+        $this->payouts = new Payouts($this);
+        $this->payoutBatches = new PayoutBatches($this);
+        $this->payoutWallets = new PayoutWallets($this);
     }
 
     /**

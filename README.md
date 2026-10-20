@@ -1,7 +1,7 @@
 # payitgo for PHP
 
-Accept crypto payments with [payitgo](https://api.payitgo.co/docs) from PHP 8.1+. Needs only the curl
-and json extensions.
+Accept crypto payments with [payitgo](https://api.payitgo.co/docs), and pay your own clients from
+your payout wallet, from PHP 8.1+. Needs only the curl and json extensions.
 
 Full reference, with every method, option, type and error: [api.payitgo.co/docs/sdk-php](https://api.payitgo.co/docs/sdk-php).
 
@@ -201,6 +201,192 @@ In Laravel, read the body with `$request->getContent()` and the header with
 **Testing it.** `$payitgo->webhooks->test()` queues a signed `ping` event to the webhook's
 URL and returns its delivery (`400` when no URL is set).
 
+## Payouts
+
+Pay your own clients (withdrawals from your platform, payroll, prizes) from your **payout
+wallet**: one address per network, yours alone, that you top up
+([Mass payouts](https://api.payitgo.co/docs/payouts)). Payout coins: `USDT_TRC20`, `TRX`,
+`USDT_BEP20`, `USDC_BEP20` and `BNB`. Any key reads; everything that writes needs a key with
+**payouts** turned on in the dashboard (`403` otherwise). Amounts are decimal strings: a number
+you pass is sent as a string.
+
+### Payout requests, one by one
+
+When one of your clients asks for a payout, send the request as it comes in. payitgo checks and
+prices it at once and keeps it in your open list, with its costs:
+
+```php
+$item = $payitgo->payouts->request([
+    'reference' => $withdrawal->id,        // your id for it: safe to retry, never paid twice
+    'asset'     => 'USDT_TRC20',
+    'address'   => $withdrawal->address,
+    'amount'    => '120',                  // fees on top, unless the list's fee_paid_by is 'recipient'
+    'name'      => $client->name,          // optional: name, email, note (kept with it; nothing is emailed)
+]);
+if ($item['status'] === 'invalid') {
+    // kept, never sent: $item['errors'][0]['message'], e.g. "this address is for Tron, not BNB Smart Chain"
+}
+// $item['fee'], $item['send_amount'] (what arrives), $item['debit'] (what leaves the wallet)
+```
+
+The same `reference` again returns that payment (`201` the first time, `200` after: both
+return the payment), so a timeout is safe to retry. Then send the list when you choose, from a
+cron job say (or let it send itself with [auto-send](https://api.payitgo.co/docs/payouts#auto-send)):
+
+```php
+$inbox = $payitgo->payouts->inbox();       // ['inbox' => …, 'coverage' => […], 'items' => […], 'total' => …]
+foreach ($inbox['coverage'] as $c) {
+    if ($c['top_up'] !== '0') {
+        // send $c['top_up'] of $c['asset'] to $c['address'] first, or the batch waits for it
+    }
+}
+$batch = $payitgo->payouts->send();        // every valid request, as a batch; or send([$id, …])
+// $batch['status']: 'pending_approval', 'awaiting_funds' ($batch['waiting'] says why) or 'processing'
+// (invalid requests stay in the list; up to 10,000 go per call)
+
+$payitgo->payouts->cancel($item['id']);    // out of the list; a sent one not on its way yet is canceled
+$payitgo->payouts->retrieve($item['id']);  // any payment, request or batch row, by id…
+$payitgo->payouts->retrieveByReference($withdrawal->id); // …or by your reference
+```
+
+`send([])` throws `\InvalidArgumentException` rather than send everything: pass no ids (or
+`null`) to send every valid request.
+
+To show a client the fee before they ask, quote up to 100 payments without keeping anything:
+
+```php
+$quote = $payitgo->payouts->quote(['fee_paid_by' => 'recipient', 'items' => [
+    ['asset' => 'USDT_BEP20', 'address' => '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', 'amount' => '120'],
+]]);
+// $quote['items'][0]['send_amount'] is what arrives; $quote['quote']['total_usd'] what it all takes
+```
+
+### Batches
+
+A whole list at once (payroll, prizes): up to 1000 payments a call, 10,000 a batch.
+
+```php
+$batch = $payitgo->payoutBatches->create([
+    'reference' => 'payroll-2026-10',      // safe to retry: returns that batch
+    'name'      => 'October payroll',
+    'items'     => [
+        ['reference' => 'payroll-2026-10-ana', 'asset' => 'USDT_TRC20', 'address' => 'TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi', 'amount' => '120', 'name' => 'Ana Silva'],
+        ['reference' => 'payroll-2026-10-ben', 'asset' => 'USDT_BEP20', 'address' => '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', 'amount' => '250'],
+    ],
+]);
+// 'quoted': $batch['totals'] per coin, $batch['counts'], $batch['total_usd']; its prices hold for an hour
+// (15 minutes when it has converted payments)
+$invalid = $payitgo->payoutBatches->items($batch['id'], ['status' => 'invalid']); // each with its errors
+$batch = $payitgo->payoutBatches->submit($batch['id']); // 409 "its prices expired": quote() it, then submit
+```
+
+Also `payoutBatches->list()`, `retrieve($id)`, `addItems($id, $items)` (before it is
+submitted), `quote($id)` (priced again) and `cancel($id)`.
+
+### Claim links
+
+When you don't have the recipient's address, make the payment a claim link: `'claim' => true`
+(or `claim_assets`) and no `address`. Its recipient chooses the coin (`asset`, or one of
+`claim_assets`, at the same dollar value) and the address
+([Claim links](https://api.payitgo.co/docs/payouts#claim-links)). With an `email`, payitgo emails
+the link once the payment is funded, and a code sent there confirms the claim; without one, share
+`$item['claim']['url']` yourself. An email alone makes no claim link: a payment without an address
+is `invalid`. Payout requests, batch rows and quotes all take them.
+
+```php
+$item = $payitgo->payouts->request([
+    'reference'    => 'prize-2026-10-ana',
+    'asset'        => 'USDT_TRC20',
+    'amount'       => '50',
+    'email'        => 'ana@example.com',     // the link is emailed here
+    'claim'        => true,                  // no address: a claim link
+    'claim_assets' => ['USDT_BEP20', 'BNB'], // optional: the other coins the recipient may choose
+]);
+// $item['claim']: ['email' => …, 'assets' => […], 'emailed' => 0, 'extended' => 0, 'url' => …]
+```
+
+Once funded it is `claimable` until `$item['claim']['expires_at']`. Claimed, it goes on like any
+payment (`queued`, then `sent`), with `claim['claimed_at']`, and `claim['funded_asset']` and
+`claim['funded_amount']` when the recipient chose another coin. Never claimed, it is `expired`
+and its money is yours to spend again. Batches count them in `counts['claimable']` and
+`counts['expired']`. Emailing a link again and extending it are done in the dashboard.
+
+### Converted payments
+
+To pay recipients in another coin than your wallet holds, give a batch (or a quote)
+`'convert' => 'convert'` and `convert_from`: every payment in another coin is paid from
+`convert_from`, converted on its way
+([Conversion](https://api.payitgo.co/docs/payouts#conversion)). Both default to your payout
+settings; `'same_network'` pays each payment from the wallet's own coin.
+
+```php
+$batch = $payitgo->payoutBatches->create([
+    'reference'    => 'prizes-2026-10',
+    'convert'      => 'convert',
+    'convert_from' => 'USDT_TRC20',          // the wallet's coin the payments are paid from
+    'items'        => [
+        ['reference' => 'prize-1', 'asset' => 'BNB', 'address' => '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', 'amount' => '0.5'],
+    ],
+]);
+$row = $payitgo->payoutBatches->items($batch['id'])['items'][0];
+// $row['convert']: ['to' => 'BNB', 'ticker' => 'BNB', 'network' => …, 'to_amount' => '0.5', 'estimate' => …]
+// $row['asset'], $row['amount'], $row['fee'] (with $row['conversion_fee']) and $row['debit'] are in USDT_TRC20
+```
+
+`convert['estimate']` is about what arrives; `convert['amount_out']` is what did, once sent.
+`address` is the recipient's on `convert['to']`'s network. A coin that cannot be converted to
+right now makes the row `invalid` (`conversion_unavailable`). Payout requests follow your payout
+settings.
+
+### The payout wallet
+
+```php
+foreach ($payitgo->payoutWallets->list() as $wallet) { // one per network: tron, bsc
+    foreach ($wallet['assets'] as $a) {
+        echo $wallet['address'], ' ', $a['asset'], ': spendable ', $a['spendable'], ', needed ', $a['needed'], PHP_EOL;
+    }
+}
+```
+
+A batch the wallet cannot cover waits (`awaiting_funds`), and its `waiting.shortfall` says what
+to send where; it starts by itself once the money is there.
+
+### Payouts in test mode
+
+With a test key the payout wallet is on paper: top it up with a call, and payments are sent
+within seconds, with made-up `tx_id`s on no chain.
+
+```php
+$payitgo->payoutWallets->simulateTopUp('USDT_TRC20', '1000'); // test keys only: a live key gets 400
+```
+
+### Payout webhooks
+
+Each step raises an event, signed like every other: `payout_batch.quoted`,
+`payout_batch.pending_approval`, `payout_batch.approved`, `payout_batch.rejected`,
+`payout_batch.awaiting_funds`, `payout_batch.processing`, `payout_batch.completed`,
+`payout_batch.canceled`, `payout_item.sent`, `payout_item.failed`, `payout_item.canceled`,
+`payout_item.claimed`, `payout_item.claim_expired` and `payout_wallet.withdrawn`. `data` is the
+batch, the payment or the withdrawal. A batch created with its own `webhook_url` sends its events
+there instead. Schedules made in the dashboard (a batch made again and again; its batches have
+`'source' => 'schedule'`) send `payout_schedule.run` (`data`: the schedule) and
+`payout_schedule.funding_needed` (`data`: `['schedule' => …, 'shortfall' => [['asset' => …,
+'network' => …, 'amount' => …, 'address' => …]]]`, before a run the wallet cannot cover). The
+schedule there is a summary (`id`, `name`, `status`, `cadence`, `next_run_at`, `last_batch_id`,
+`totals`, …) without its rows.
+
+```php
+switch ($event['type']) {
+    case 'payout_item.sent':
+        markWithdrawalPaid($event['data']['reference'], $event['data']['tx_id']);
+        break;
+    case 'payout_item.failed':             // never sent: its money stays in the wallet, its reference is free again
+    case 'payout_item.claim_expired':      // a claim link never claimed: the same
+        reopenWithdrawal($event['data']['released_reference']);
+        break;
+}
+```
+
 ## API
 
 ```php
@@ -230,10 +416,32 @@ $payitgo->webhooks->remove();                         // the webhook, 'url' => n
 $payitgo->webhooks->test();                           // the delivery of a "ping" event
 $payitgo->webhooks->constructEvent($rawBody, $signatureHeader, $secret = null, $tolerance = 300);
 \Payitgo\Webhook::constructEvent($rawBody, $signatureHeader, $secret, $tolerance = 300); // no client needed
+
+$payitgo->payouts->request(['reference' => …, 'asset' => …, 'address' => …, 'amount' => …,
+                          'tag' => …, 'name' => …, 'email' => …, 'note' => …]); // the payment, in your open list
+$payitgo->payouts->request(['asset' => …, 'amount' => …, 'email' => …, 'claim' => true, 'claim_assets' => […]]); // a claim link
+$payitgo->payouts->retrieve($id);                     // a payment: a request or a batch row
+$payitgo->payouts->retrieveByReference($reference);
+$payitgo->payouts->inbox(['status' => …, 'limit' => …, 'offset' => …]); // ['inbox' => …, 'coverage' => …, 'items' => …, 'total' => …, …]
+$payitgo->payouts->send($ids = null);                 // the batch the valid requests went into
+$payitgo->payouts->cancel($id);                       // the payment, 'status' => 'canceled'
+$payitgo->payouts->quote(['fee_paid_by' => …, 'convert' => …, 'convert_from' => …, 'items' => [[…], …]]); // ['quote' => …, 'items' => […]], nothing kept
+$payitgo->payoutBatches->create(['reference' => …, 'name' => …, 'fee_paid_by' => …, 'webhook_url' => …,
+                               'convert' => …, 'convert_from' => …, 'items' => [[…], …]]);
+$payitgo->payoutBatches->list(['status' => …, 'limit' => …, 'offset' => …]); // ['batches' => […], 'total' => …, …]
+$payitgo->payoutBatches->retrieve($batchId);
+$payitgo->payoutBatches->items($batchId, ['status' => ['sent', 'failed'], 'limit' => …, 'offset' => …]); // ['items' => […], 'total' => …, …]
+$payitgo->payoutBatches->addItems($batchId, [[…], …]);
+$payitgo->payoutBatches->quote($batchId);             // priced again
+$payitgo->payoutBatches->submit($batchId);
+$payitgo->payoutBatches->cancel($batchId);
+$payitgo->payoutWallets->list();                      // [['chain' => …, 'address' => …, 'assets' => [[…], …]], …]
+$payitgo->payoutWallets->simulateTopUp($asset, $amount); // test keys: the wallets
 ```
 
 Responses are associative arrays with the API's field names (see the
-[payment object](https://api.payitgo.co/docs/payments) and [webhooks](https://api.payitgo.co/docs/webhooks)).
+[payment object](https://api.payitgo.co/docs/payments), [mass payouts](https://api.payitgo.co/docs/payouts)
+and [webhooks](https://api.payitgo.co/docs/webhooks)).
 `\Payitgo\Webhooks::EVENTS` lists the event types.
 
 ## Errors
@@ -246,7 +454,8 @@ try {
 }
 ```
 
-`PayitgoException::$status` is the HTTP status (0 for a network error). `constructEvent`
+`PayitgoException::$status` is the HTTP status (0 for a network error): for payouts, `403` for
+a key without payouts and `409` for a batch whose state refuses the call. `constructEvent`
 throws `SignatureVerificationException` for a bad signature, a stale timestamp, or when it
 has no secret (none passed and no `webhook_secret`).
 
