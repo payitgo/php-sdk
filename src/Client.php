@@ -18,7 +18,7 @@ use Payitgo\Exception\PayitgoException;
  */
 final class Client
 {
-    public const VERSION = '0.6.0';
+    public const VERSION = '0.6.1';
 
     /** Used when neither base_url nor PAYITGO_BASE_URL is set. */
     private const DEFAULT_BASE_URL = 'https://api.payitgo.co';
