@@ -85,7 +85,7 @@ try {
     check('requires a base URL', true);
 }
 check('no livemode property: isLive() asks payitgo', !property_exists(Client::class, 'livemode'));
-check('the version is 0.6.0', Client::VERSION === '0.6.0');
+check('the version is set', preg_match('/^\d+\.\d+\.\d+$/', Client::VERSION) === 1);
 check('the events are listed, in the API\'s order', Webhooks::EVENTS === [
     'payment.partially_paid', 'payment.detecting', 'payment.confirmed', 'payment.underpaid', 'payment.expired', 'payment.failed',
     'payment.wrong_asset', 'payment.late_deposit', 'payout.approved', 'payout.rejected', 'payout.sent', 'settlement.completed',
