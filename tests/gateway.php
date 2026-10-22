@@ -38,7 +38,7 @@ $withCoin = fn (string $token): array => [
     'id' => 'pay_1', 'merchant_id' => 'mch_1', 'order_id' => 'ORD 7/1', 'status' => 'pending', 'livemode' => false,
     'token' => $token, 'chain' => 'xrp', 'deposit_address' => 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe',
     'destination_tag' => 1042, 'crypto_amount' => '20', 'received_amount' => '0', 'usd_amount' => '10',
-    'amount_due_usd' => '10', 'fees_paid_by_customer' => false, 'network_fee' => '0.000012', 'network_fee_usd' => '0.01',
+    'amount_due_usd' => '10', 'fees_paid_by_customer' => false,
     'settlement' => 'custodial', 'received_usd' => '0', 'rate_locked' => '0.5', 'deposits' => [],
     'expires_at' => '2026-10-10T12:15:00Z', 'created_at' => '2026-10-10T12:00:00Z',
     'network_fee_note' => 'Final in seconds. Include the destination tag: it is required.',
@@ -53,7 +53,7 @@ $simulated = fn (string $outcome): array => [
     'simulation' => ['outcome' => $outcome, 'state' => 'running'],
     'token' => 'USDT_TRC20', 'chain' => 'tron', 'deposit_address' => 'TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o',
     'crypto_amount' => '20', 'received_amount' => '20', 'usd_amount' => '20', 'amount_due_usd' => '20',
-    'fees_paid_by_customer' => false, 'network_fee' => '1', 'network_fee_usd' => '0.3', 'settlement' => 'custodial',
+    'fees_paid_by_customer' => false, 'settlement' => 'custodial',
     'received_usd' => '20', 'rate_locked' => '1',
     'deposits' => [[
         'tx_id' => '8de0120d502929788a71a7b7cf60e5ef3c095cdbb05cd8a7ddabc0bc9ffa9582', 'token' => 'USDT_TRC20', 'chain' => 'tron', 'amount' => '20',
@@ -124,7 +124,7 @@ $dec = fn (float $v): string => rtrim(rtrim(number_format($v, 6, '.', ''), '0'),
 // invalid (kept, with its errors) for an address it cannot pay. A claim
 // link (claim, or claim_assets: never an email alone) has no address; with $rule's
 // convert, a payment in another coin than convert_from is paid from it,
-// converted on its way (a $1 + 0.5% conversion fee of $3 here).
+// converted on its way (its fee $3 more here, for converting).
 $priced = function (array $in, string $id, string $batchId, int $row, array $rule = []) use ($coins, $networks, $dec): array {
     $asset = strtoupper((string) ($in['asset'] ?? ''));
     $address = (string) ($in['address'] ?? '');
@@ -140,8 +140,7 @@ $priced = function (array $in, string $id, string $batchId, int $row, array $rul
         'id' => $id, 'merchant_id' => 'mch_1', 'livemode' => false, 'batch_id' => $batchId, 'reference' => $in['reference'] ?? '',
         'row' => $row, 'recipient' => array_filter(['name' => $in['name'] ?? '', 'email' => $in['email'] ?? '', 'note' => $in['note'] ?? '']),
         'asset' => $asset, 'ticker' => $ticker, 'chain' => $chain, 'address' => $address,
-        'amount' => $amount, 'send_amount' => $amount, 'platform_fee' => '0.6',
-        'network_fee' => '5.748213', 'fee' => $dec($fee), 'debit' => $dec((float) $amount + $fee),
+        'amount' => $amount, 'send_amount' => $amount, 'fee' => $dec($fee), 'debit' => $dec((float) $amount + $fee),
         'usd_rate' => '1', 'amount_usd' => $amount, 'status' => 'ready', 'errors' => [], 'warnings' => [],
         'created_at' => '2026-10-20T09:15:01Z', 'updated_at' => '2026-10-20T09:15:01Z',
     ];
@@ -174,11 +173,10 @@ $priced = function (array $in, string $id, string $batchId, int $row, array $rul
     if ($to !== null) {
         $item['convert'] = ['to' => $to, 'ticker' => $coins[$to][1], 'network' => $networks[$coins[$to][0]],
             'to_amount' => (string) $in['amount'], 'estimate' => $dec((float) $in['amount'] * 0.995)];
-        $item['conversion_fee'] = '3';
     }
     if ($errors !== []) {
-        $item = array_merge($item, ['status' => 'invalid', 'send_amount' => '0', 'platform_fee' => '0', 'network_fee' => '0', 'fee' => '0',
-            'debit' => '0', 'usd_rate' => '0', 'amount_usd' => '0', 'errors' => $errors]);
+        $item = array_merge($item, ['status' => 'invalid', 'send_amount' => '0', 'fee' => '0', 'debit' => '0', 'usd_rate' => '0',
+            'amount_usd' => '0', 'errors' => $errors]);
     }
     return $item;
 };

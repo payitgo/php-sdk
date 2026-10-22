@@ -334,7 +334,7 @@ $batch = $payitgo->payoutBatches->create([
 ]);
 $row = $payitgo->payoutBatches->items($batch['id'])['items'][0];
 // $row['convert']: ['to' => 'BNB', 'ticker' => 'BNB', 'network' => …, 'to_amount' => '0.5', 'estimate' => …]
-// $row['asset'], $row['amount'], $row['fee'] (with $row['conversion_fee']) and $row['debit'] are in USDT_TRC20
+// $row['asset'], $row['amount'], $row['fee'] (converting included) and $row['debit'] are in USDT_TRC20
 ```
 
 `convert['estimate']` is about what arrives; `convert['amount_out']` is what did, once sent.

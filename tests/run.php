@@ -503,10 +503,10 @@ try {
         && $prizes['counts']['expired'] === 0);
     $rows = $payitgo->payoutBatches->items($prizes['id'])['items'];
     check('a converted payment is in the wallet\'s coin, with its conversion', $rows[0]['asset'] === 'USDT_TRC20' && $rows[0]['amount'] === '300'
-        && $rows[0]['address'] === '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed' && $rows[0]['conversion_fee'] === '3'
+        && $rows[0]['address'] === '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed'
         && $rows[0]['fee'] === '9.348213' && $rows[0]['debit'] === '309.348213' && $rows[0]['convert'] === ['to' => 'BNB', 'ticker' => 'BNB',
             'network' => 'BNB Smart Chain (BEP-20)', 'to_amount' => '0.5', 'estimate' => '0.4975']);
-    check('a payment in the wallet\'s coin, or a claim link, is not converted', !isset($rows[1]['convert']) && !isset($rows[1]['conversion_fee'])
+    check('a payment in the wallet\'s coin, or a claim link, is not converted', !isset($rows[1]['convert']) && $rows[1]['fee'] === '6.348213'
         && $rows[1]['amount'] === '20' && !isset($rows[2]['convert']) && $rows[2]['claim']['email'] === 'ben@example.com');
     $plain = $payitgo->payoutBatches->create(['items' => [['asset' => 'USDT_TRC20', 'address' => 'TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi', 'amount' => '1']]]);
     check('payoutBatches->create sends no convert unless given', !array_key_exists('convert', $last()['body']) && $plain['convert'] === 'same_network'
