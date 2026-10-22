@@ -16,7 +16,6 @@ composer require payitgo/payitgo-php
 require 'vendor/autoload.php';
 
 $payitgo = new \Payitgo\Client(getenv('PAYITGO_KEY'), [
-    'base_url'       => getenv('PAYITGO_BASE_URL'),
     'webhook_secret' => getenv('PAYITGO_WEBHOOK_SECRET'), // the signing secret: see Webhooks (IPN) below
 ]);
 
@@ -206,8 +205,9 @@ URL and returns its delivery (`400` when no URL is set).
 
 Pay your own clients (withdrawals from your platform, payroll, prizes) from your **payout
 wallet**: one address per network, yours alone, that you top up
-([Mass payouts](https://api.payitgo.co/docs/payouts)). Payout coins: `USDT_TRC20`, `TRX`,
-`USDT_BEP20`, `USDC_BEP20` and `BNB`. Any key reads; everything that writes needs a key with
+([Mass payouts](https://api.payitgo.co/docs/payouts)). Payout coins, such as `USDT_TRC20`, `USDT_BEP20`
+or `BTC`, are listed in [Networks and coins](https://api.payitgo.co/docs/payouts#networks-and-coins).
+Any key reads; everything that writes needs a key with
 **payouts** turned on in the dashboard (`403` otherwise). Amounts are decimal strings: a number
 you pass is sent as a string.
 
@@ -221,7 +221,7 @@ $item = $payitgo->payouts->request([
     'reference' => $withdrawal->id,        // your id for it: safe to retry, never paid twice
     'asset'     => 'USDT_TRC20',
     'address'   => $withdrawal->address,
-    'amount'    => '120',                  // fees on top, unless the list's fee_paid_by is 'recipient'
+    'amount'    => '120',                  // fees on top, unless your payout settings' fee_paid_by is 'recipient'
     'name'      => $client->name,          // optional: name, email, note (kept with it; nothing is emailed)
 ]);
 if ($item['status'] === 'invalid') {
@@ -293,7 +293,8 @@ When you don't have the recipient's address, make the payment a claim link: `'cl
 `claim_assets`, at the same dollar value) and the address
 ([Claim links](https://api.payitgo.co/docs/payouts#claim-links)). With an `email`, payitgo emails
 the link once the payment is funded, and a code sent there confirms the claim; without one, share
-`$item['claim']['url']` yourself. An email alone makes no claim link: a payment without an address
+`$item['claim']['url']` yourself and give its PIN, `$item['claim']['pin']`, another way: the
+recipient enters it to claim. An email alone makes no claim link: a payment without an address
 is `invalid`. Payout requests, batch rows and quotes all take them.
 
 ```php
@@ -344,7 +345,7 @@ settings.
 ### The payout wallet
 
 ```php
-foreach ($payitgo->payoutWallets->list() as $wallet) { // one per network: tron, bsc
+foreach ($payitgo->payoutWallets->list() as $wallet) { // one per network: tron, bsc, ethereum, bitcoin, …
     foreach ($wallet['assets'] as $a) {
         echo $wallet['address'], ' ', $a['asset'], ': spendable ', $a['spendable'], ', needed ', $a['needed'], PHP_EOL;
     }
@@ -413,7 +414,6 @@ $page = $payitgo->payouts->list(['status' => ['sent', 'failed', 'canceled', 'exp
 
 ```php
 $payitgo = new \Payitgo\Client($apiKey, [
-    'base_url'       => 'https://api.payitgo.co', // or PAYITGO_BASE_URL
     'timeout'        => 30,
     'max_retries'    => 2,                         // network errors, 429 and 5xx
     'webhook_secret' => $secret,                   // for $payitgo->webhooks->constructEvent()
@@ -421,7 +421,7 @@ $payitgo = new \Payitgo\Client($apiKey, [
 ]);
 
 $payitgo->isLive();                                   // false for a test key (asks payitgo once)
-$payitgo->payments->create(['order_id' => …, 'amount_usd' => …, 'token' => …,
+$payitgo->payments->create(['order_id' => …, 'amount_usd' => …, 'token' => …, 'tokens' => […],
                           'description' => …, 'metadata' => […], 'customer_email' => …,
                           'success_url' => …, 'cancel_url' => …, 'webhook_url' => …, 'simulate' => …]);
 $payitgo->payments->create(['order_id' => …, 'price_amount' => …, 'price_currency' => …, …]); // priced in another currency
@@ -429,10 +429,10 @@ $payitgo->payments->selectToken($paymentId, $token);  // or your order id: the p
 $payitgo->payments->simulate($paymentId, 'confirmed'); // test keys: plays the outcome
 $payitgo->payments->retrieve($paymentId);             // or your order id
 $payitgo->payments->list(['status' => 'confirmed', 'store_id' => $storeId, 'limit' => 50, 'offset' => 0]);
-$payitgo->tokens->list();                             // [['token' => …, 'chain' => …, 'min_usd' => …, 'network_fee_usd' => …, 'fee_note' => …]]
+$payitgo->tokens->list();                             // [['token' => …, 'chain' => …, 'min_usd' => …, 'network_fee_usd' => …, 'fee_note' => …, …]]
 $payitgo->tokens->list('49.90');                      // the coins a $49.90 payment offers, with amount_due_usd
 $payitgo->checkout->retrieve($checkoutToken);         // public payer view
-$payitgo->webhooks->get();                            // ['livemode' => …, 'url' => …, 'secret' => …, 'created_at' => …, 'updated_at' => …]
+$payitgo->webhooks->get();                            // ['livemode' => …, 'url' => …, 'secret' => …, 'events' => […], 'created_at' => …, 'updated_at' => …]
 $payitgo->webhooks->set($url);                        // the webhook
 $payitgo->webhooks->remove();                         // the webhook, 'url' => null (the secret stays)
 $payitgo->webhooks->test();                           // the delivery of a "ping" event

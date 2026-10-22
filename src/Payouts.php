@@ -20,8 +20,8 @@ final class Payouts
 
     /**
      * Adds one of your clients' payout requests to your open list, checked
-     * and priced. Required: asset (USDT_TRC20, TRX, USDT_BEP20, USDC_BEP20,
-     * BNB), address, amount (a decimal string; a number is sent as a string).
+     * and priced. Required: asset (a payout coin: USDT_TRC20, USDT_BEP20, BTC,
+     * …, https://api.payitgo.co/docs/payouts#networks-and-coins), address, amount (a decimal string; a number is sent as a string).
      * Optional: reference (your id for it, unique in its mode: send one),
      * tag, name, email, note, webhook_url (https: this payment's events go
      * there instead of your webhook's URL, and it keeps it once sent). A

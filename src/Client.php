@@ -9,7 +9,7 @@ use Payitgo\Exception\PayitgoException;
 /**
  * The payitgo client. Use it from your server only: the API key is a secret.
  *
- *     $payitgo = new \Payitgo\Client(getenv('PAYITGO_KEY'), ['base_url' => 'https://api.payitgo.co']);
+ *     $payitgo = new \Payitgo\Client(getenv('PAYITGO_KEY'));
  *     $payment = $payitgo->payments->create(['order_id' => 'ORD-1001', 'amount_usd' => 10, 'token' => 'USDT_TRC20']);
  *     // send the customer to $payment['checkout_url']; fulfil on the payment.confirmed webhook
  *
@@ -56,9 +56,13 @@ final class Client
         if (trim($apiKey) === '') {
             throw new \InvalidArgumentException('payitgo: the API key is required');
         }
-        $baseUrl = $options['base_url'] ?? (getenv('PAYITGO_BASE_URL') ?: self::DEFAULT_BASE_URL);
+        // false is what getenv() gives for an unset variable: the same as leaving base_url out.
+        $baseUrl = $options['base_url'] ?? false;
+        if ($baseUrl === false) {
+            $baseUrl = getenv('PAYITGO_BASE_URL') ?: self::DEFAULT_BASE_URL;
+        }
         if ($baseUrl === '') {
-            throw new \InvalidArgumentException("payitgo: set base_url (or PAYITGO_BASE_URL) to your gateway's address");
+            throw new \InvalidArgumentException('payitgo: base_url is empty: leave it out to use https://api.payitgo.co');
         }
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->timeout = $options['timeout'] ?? 30;

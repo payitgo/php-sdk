@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Payitgo;
 
 /**
- * Your payout wallet of the key's mode: one address per network (tron, bsc)
- * that you top up, and what it holds of each payout coin.
+ * Your payout wallet of the key's mode: one address per network (tron, bsc,
+ * ethereum, …) that you top up, and what it holds of each payout coin.
  */
 final class PayoutWallets
 {
