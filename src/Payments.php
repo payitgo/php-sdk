@@ -8,7 +8,7 @@ final class Payments
 {
     /** The outcomes a test payment can be made to go through: see simulate(). */
     public const SIMULATION_OUTCOMES = [
-        'confirmed', 'overpaid', 'partially_paid', 'underpaid', 'expired', 'failed', 'wrong_asset', 'paid_late',
+        'confirmed', 'overpaid', 'partially_paid', 'underpaid', 'expired', 'failed', 'wrong_asset', 'paid_late', 'paid_twice',
     ];
 
     /** @param ?string $webhookUrl the client's default webhook_url */
