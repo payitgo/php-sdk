@@ -17,11 +17,12 @@ final class Payments
     }
 
     /**
-     * Creates a payment. Required: order_id, and the price: amount_usd, or
-     * price_amount in price_currency (an ISO 4217 code such as EUR, GBP or
-     * NGN), which payitgo converts into dollars at the rate of the moment.
-     * Optional: token (leave it out to let the customer choose on the checkout
-     * page), tokens (the coins to offer), description, metadata,
+     * Creates a payment. Required: order_id, and amount, the price (sent as a
+     * string) in currency: an ISO 4217 code such as EUR, GBP or NGN (any
+     * case), US dollars when left out. Every figure of the payment comes back
+     * in that currency.
+     * Optional: currency, token (leave it out to let the customer choose on
+     * the checkout page), tokens (the coins to offer), description, metadata,
      * customer_email, success_url, cancel_url, webhook_url (https: gets the
      * payment's events instead of the webhook's URL, signed with the same
      * secret; default: the client's webhook_url), simulate (test keys only:
@@ -34,10 +35,8 @@ final class Payments
      */
     public function create(array $params): array
     {
-        foreach (['amount_usd', 'price_amount'] as $amount) {
-            if (isset($params[$amount])) {
-                $params[$amount] = (string) $params[$amount];
-            }
+        if (isset($params['amount'])) {
+            $params['amount'] = (string) $params['amount'];
         }
         if (!isset($params['webhook_url']) && $this->webhookUrl !== null) {
             $params['webhook_url'] = $this->webhookUrl;

@@ -36,8 +36,8 @@ const LIVE_KEY = '9a6fd52f16ba8258c4b71ec3a7ffbe4e22ebc4ff99a1bc073fd414e0bbd4ee
 
 // Signed by the gateway's own signer.
 const SECRET = '05bd6b428158318cc38756fa34aa60795af0fc5d9a316dcc9b060c8ca1863fc3';
-const HEADER = 't=1760000000,v1=75eb20fb34bccab4b9121285930b076e5e60ccad0a2542bd76eb56d89744faed';
-const BODY = '{"id":"b8e1f80bd70ae0784c7855a4","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"040ffd5925d40e11c67b7238","order_id":"ORD-1","status":"confirmed","usd_amount":"10"}}';
+const HEADER = 't=1760000000,v1=b61376838fdc09d9241eb407eda645be1e67a88fed148fc057c56a1b784e01e5';
+const BODY = '{"id":"b8e1f80bd70ae0784c7855a4","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"040ffd5925d40e11c67b7238","order_id":"ORD-1","status":"confirmed","currency":"USD","amount":"10"}}';
 const OTHER_SECRET = 'bd4106123e659e259c401119d0c7ef0a221df306a5a414b6fb6a579499962d26';
 
 $failures = 0;
@@ -217,16 +217,16 @@ try {
         && $e->getMessage() === "a storefront's key cannot change the account's webhook: set webhook_url on its payments instead");
     check('a storefront\'s key reads it', $store->webhooks->get()['secret'] === $webhook['secret']);
 
-    $payment = $payitgo->payments->create(['order_id' => 'ORD-1', 'amount_usd' => 10]);
-    check('payments->create sends no webhook_url without one', $last()['body'] === ['order_id' => 'ORD-1', 'amount_usd' => '10'] && !isset($payment['webhook_url']));
-    $payment = $payitgo->payments->create(['order_id' => 'ORD-2', 'amount_usd' => 10, 'webhook_url' => 'https://shop.example/own']);
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-1', 'amount' => 10]);
+    check('payments->create sends no webhook_url without one', $last()['body'] === ['order_id' => 'ORD-1', 'amount' => '10'] && !isset($payment['webhook_url']));
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-2', 'amount' => 10, 'webhook_url' => 'https://shop.example/own']);
     check('payments->create sends its own webhook_url', $last()['body']['webhook_url'] === 'https://shop.example/own'
         && $payment['webhook_url'] === 'https://shop.example/own');
     $withDefault = $client(KEY, ['webhook_url' => 'https://shop.example/default']);
-    $payment = $withDefault->payments->create(['order_id' => 'ORD-3', 'amount_usd' => 10]);
+    $payment = $withDefault->payments->create(['order_id' => 'ORD-3', 'amount' => 10]);
     check('payments->create sends the client\'s webhook_url', $last()['body']['webhook_url'] === 'https://shop.example/default'
         && $payment['webhook_url'] === 'https://shop.example/default');
-    $payment = $withDefault->payments->create(['order_id' => 'ORD-4', 'amount_usd' => 10, 'webhook_url' => 'https://shop.example/own']);
+    $payment = $withDefault->payments->create(['order_id' => 'ORD-4', 'amount' => 10, 'webhook_url' => 'https://shop.example/own']);
     check('payments->create: the call\'s webhook_url wins', $last()['body']['webhook_url'] === 'https://shop.example/own');
 
     $payment = $payitgo->payments->selectToken('pay_1', 'XRP');
@@ -257,33 +257,36 @@ try {
     check('payments->simulate escapes an order id', $last()['path'] === '/v1/payments/ORD%208%2F1/simulate');
     check('payments->simulate: a simulation still running is a 409', $e !== null && $e->status === 409
         && $e->getMessage() === 'a simulation is already running for this payment');
-    $payment = $payitgo->payments->create(['order_id' => 'ORD-8', 'amount_usd' => 20, 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']);
-    check('payments->create sends simulate', $last()['body'] === ['order_id' => 'ORD-8', 'amount_usd' => '20', 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-8', 'amount' => 20, 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']);
+    check('payments->create sends simulate', $last()['body'] === ['order_id' => 'ORD-8', 'amount' => '20', 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']
         && $payment['simulation'] === ['outcome' => 'confirmed', 'state' => 'running']
         && in_array('confirmed', Payments::SIMULATION_OUTCOMES, true));
 
-    $payment = $payitgo->payments->create(['order_id' => 'ORD-10', 'price_amount' => 45.5, 'price_currency' => 'eur']);
-    check('payments->create sends a price in another currency, its amount as a string', $last()['body'] === ['order_id' => 'ORD-10', 'price_amount' => '45.5', 'price_currency' => 'eur']);
-    check('payments->create: the payment carries its price', $payment['price_amount'] === '45.5' && $payment['price_currency'] === 'EUR'
-        && $payment['price_rate'] === '1.082' && $payment['usd_amount'] === '49.23' && !isset($payment['amount_usd']));
-    $payment = $payitgo->payments->create(['order_id' => 'ORD-11', 'amount_usd' => '10']);
-    check('payments->create: a payment in dollars has no price fields', $last()['body'] === ['order_id' => 'ORD-11', 'amount_usd' => '10']
-        && !isset($payment['price_amount']) && !isset($payment['price_currency']) && !isset($payment['price_rate']));
-    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-12', 'amount_usd' => 10, 'price_amount' => '45.50', 'price_currency' => 'EUR']));
-    check('payments->create: amount_usd and a price is a 400', $e !== null && $e->status === 400
-        && $e->getMessage() === 'give amount_usd, or price_amount and price_currency: not both');
-    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-13', 'price_amount' => '45.50', 'price_currency' => 'EURO']));
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-10', 'amount' => 45.5, 'currency' => 'eur']);
+    check('payments->create sends the price in its currency, its amount as a string', $last()['body'] === ['order_id' => 'ORD-10', 'amount' => '45.5', 'currency' => 'eur']);
+    check('payments->create: the payment\'s figures are in its currency', $payment['currency'] === 'EUR' && $payment['amount'] === '45.5'
+        && $payment['amount_due'] === '45.5');
+    $payment = $payitgo->payments->create(['order_id' => 'ORD-11', 'amount' => '10']);
+    check('payments->create: without a currency the payment is in dollars', $last()['body'] === ['order_id' => 'ORD-11', 'amount' => '10']
+        && $payment['currency'] === 'USD' && $payment['amount'] === '10');
+    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-12', 'amount' => 0]));
+    check('payments->create: an amount of 0 is a 400', $last()['body'] === ['order_id' => 'ORD-12', 'amount' => '0'] && $e !== null
+        && $e->status === 400 && $e->getMessage() === 'amount must be > 0');
+    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-13', 'amount' => '45.50', 'currency' => 'EURO']));
     check('payments->create: a code that is no currency is a 400', $e !== null && $e->status === 400
-        && $e->getMessage() === 'price_currency must be the ISO 4217 code of a currency (EUR, GBP, NGN…)');
-    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-14', 'price_amount' => '5000', 'price_currency' => 'XAF']));
+        && $e->getMessage() === 'currency must be the ISO 4217 code of a currency (USD, EUR, GBP, NGN…)');
+    $e = apiError(fn () => $payitgo->payments->create(['order_id' => 'ORD-14', 'amount' => '5000', 'currency' => 'XAF']));
     check('payments->create: no exchange rate is a 503', $e !== null && $e->status === 503
-        && $e->getMessage() === 'exchange rate unavailable for price_currency: try again shortly');
+        && $e->getMessage() === 'exchange rate unavailable for currency: try again shortly');
 
     $tokens = $payitgo->tokens->list();
     check('tokens->list lists every token', $last()['method'] === 'GET' && $last()['path'] === '/v1/tokens' && $last()['query'] === ''
-        && $tokens[0]['token'] === 'USDT_BEP20');
+        && $tokens[0]['token'] === 'USDT_BEP20' && $last()['reply']['currency'] === 'USD');
     $tokens = $payitgo->tokens->list('49.90');
-    check('tokens->list with an amount asks for its options', $last()['query'] === 'amount_usd=49.90' && $tokens[0]['amount_due_usd'] === '40.43');
+    check('tokens->list with an amount asks for its options', $last()['query'] === 'amount=49.90' && $tokens[0]['amount_due'] === '40.43');
+    $tokens = $payitgo->tokens->list(49.9, 'eur');
+    check('tokens->list with a currency lists the figures in it', $last()['query'] === 'amount=49.9&currency=eur'
+        && $last()['reply']['currency'] === 'EUR' && $tokens[0]['minimum'] === '1');
 
     // Payout requests, one by one.
     $item = $payitgo->payouts->request(['reference' => 'WD 77/a', 'asset' => 'USDT_TRC20', 'address' => 'TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi',

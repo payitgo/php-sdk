@@ -37,9 +37,9 @@ $forbidden = [403, ['error' => "a storefront's key cannot change the account's w
 $withCoin = fn (string $token): array => [
     'id' => 'pay_1', 'merchant_id' => 'mch_1', 'order_id' => 'ORD 7/1', 'status' => 'pending', 'livemode' => false,
     'token' => $token, 'chain' => 'xrp', 'deposit_address' => 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe',
-    'destination_tag' => 1042, 'crypto_amount' => '20', 'received_amount' => '0', 'usd_amount' => '10',
-    'amount_due_usd' => '10', 'fees_paid_by_customer' => false,
-    'settlement' => 'custodial', 'received_usd' => '0', 'rate_locked' => '0.5', 'deposits' => [],
+    'destination_tag' => 1042, 'crypto_amount' => '20', 'crypto_received' => '0', 'currency' => 'USD', 'amount' => '10',
+    'amount_due' => '10', 'fees_paid_by_customer' => false,
+    'settlement' => 'custodial', 'amount_received' => '0', 'rate_locked' => '0.5', 'deposits' => [],
     'expires_at' => '2026-10-10T12:15:00Z', 'created_at' => '2026-10-10T12:00:00Z',
     'network_fee_note' => 'Final in seconds. Include the destination tag: it is required.',
     'qr_payload' => 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe',
@@ -52,40 +52,36 @@ $simulated = fn (string $outcome): array => [
     'id' => 'pay_2', 'merchant_id' => 'mch_1', 'order_id' => 'ORD 8/1', 'status' => 'detecting', 'livemode' => false,
     'simulation' => ['outcome' => $outcome, 'state' => 'running'],
     'token' => 'USDT_TRC20', 'chain' => 'tron', 'deposit_address' => 'TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o',
-    'crypto_amount' => '20', 'received_amount' => '20', 'usd_amount' => '20', 'amount_due_usd' => '20',
+    'crypto_amount' => '20', 'crypto_received' => '20', 'currency' => 'USD', 'amount' => '20', 'amount_due' => '20',
     'fees_paid_by_customer' => false, 'settlement' => 'custodial',
-    'received_usd' => '20', 'rate_locked' => '1',
+    'amount_received' => '20', 'rate_locked' => '1',
     'deposits' => [[
         'tx_id' => '8de0120d502929788a71a7b7cf60e5ef3c095cdbb05cd8a7ddabc0bc9ffa9582', 'token' => 'USDT_TRC20', 'chain' => 'tron', 'amount' => '20',
-        'usd_value' => '20', 'counted' => true, 'status' => 'pending', 'seen_at' => '2026-10-10T12:00:05Z', 'simulated' => true,
+        'value' => '20', 'counted' => true, 'status' => 'pending', 'seen_at' => '2026-10-10T12:00:05Z', 'simulated' => true,
     ]],
     'expires_at' => '2026-10-10T12:15:00Z', 'created_at' => '2026-10-10T12:00:00Z',
     'network_fee_note' => 'Final in about a minute.',
     'qr_payload' => 'TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o',
 ];
-// The dollar value of one unit of the currencies a price may be given in;
-// null: a currency whose rate cannot be had right now.
-$rates = ['EUR' => '1.082', 'XAF' => null];
-// A created payment echoes the request; with simulate, it shows its
-// simulation instead: running when it has its coin, else waiting for it. A
-// price in another currency is converted into usd_amount, as the API does.
-$created = function (array $body) use ($rates): array {
+// The dollar value of one unit of the currencies a payment may be priced
+// in; null: a currency whose rate cannot be had right now.
+$rates = ['USD' => '1', 'EUR' => '1.082', 'XAF' => null];
+// A created payment echoes the request, its figures in its currency (US
+// dollars without one), as the API does; with simulate, it shows its
+// simulation instead: running when it has its coin, else waiting for it.
+$created = function (array $body): array {
     $payment = array_merge($body, ['id' => 'pay_1', 'status' => 'pending']);
     if (isset($body['simulate'])) {
         unset($payment['simulate']);
         $payment['simulation'] = ['outcome' => $body['simulate'], 'state' => isset($body['token']) ? 'running' : 'requested'];
     }
-    if (isset($body['price_currency'])) {
-        $currency = strtoupper($body['price_currency']);
-        $decimal = fn (string $v): string => str_contains($v, '.') ? rtrim(rtrim($v, '0'), '.') : $v;
-        $payment['usd_amount'] = $decimal(number_format((float) $body['price_amount'] * (float) $rates[$currency], 2, '.', ''));
-        $payment['price_amount'] = $decimal($body['price_amount']);
-        $payment['price_currency'] = $currency;
-        $payment['price_rate'] = $rates[$currency];
-    }
+    $decimal = fn (string $v): string => str_contains($v, '.') ? rtrim(rtrim($v, '0'), '.') : $v;
+    $payment['currency'] = strtoupper((string) ($body['currency'] ?? 'USD'));
+    $payment['amount'] = $decimal((string) $body['amount']);
+    $payment['amount_due'] = $payment['amount'];
     return $payment;
 };
-$currency = strtoupper((string) ($body['price_currency'] ?? ''));
+$currency = strtoupper((string) ($body['currency'] ?? 'USD'));
 
 // Payouts: the payments (payout requests and batch rows) by id, the batches
 // by id (the open list of requests is 'inbox'), and the test wallet's paper
@@ -573,13 +569,13 @@ $replay = function () use ($query, $storefront, $rfc3339, &$events): array {
             'created_at' => '2026-10-10T12:00:00Z',
         ]]],
     $path === '/v1/payments' && $method === 'POST' => match (true) {
-        $currency !== '' && isset($body['amount_usd']) => [400, ['error' => 'give amount_usd, or price_amount and price_currency: not both']],
-        $currency !== '' && !array_key_exists($currency, $rates) => [400, ['error' => 'price_currency must be the ISO 4217 code of a currency (EUR, GBP, NGN…)']],
-        $currency !== '' && $rates[$currency] === null => [503, ['error' => 'exchange rate unavailable for price_currency: try again shortly']],
+        (float) ($body['amount'] ?? 0) <= 0 => [400, ['error' => 'amount must be > 0']],
+        !array_key_exists($currency, $rates) => [400, ['error' => 'currency must be the ISO 4217 code of a currency (USD, EUR, GBP, NGN…)']],
+        $rates[$currency] === null => [503, ['error' => 'exchange rate unavailable for currency: try again shortly']],
         default => [201, $created($body)],
     },
-    $path === '/v1/tokens' && $method === 'GET' => [200, ['tokens' => [[
-        'token' => 'USDT_BEP20', 'chain' => 'bsc', 'min_usd' => '1', 'network_fee_usd' => '0.01', 'amount_due_usd' => '40.43', 'fee_note' => '',
+    $path === '/v1/tokens' && $method === 'GET' => [200, ['currency' => strtoupper((string) ($query['currency'] ?? 'USD')), 'tokens' => [[
+        'token' => 'USDT_BEP20', 'chain' => 'bsc', 'minimum' => '1', 'network_fee' => '0.01', 'amount_due' => '40.43', 'fee_note' => '',
     ]]]],
     $method === 'POST' && preg_match('#^/v1/payments/([^/]+)/token$#', $path, $m) === 1
         && in_array(rawurldecode($m[1]), ['pay_1', 'ORD 7/1'], true) => match (true) {

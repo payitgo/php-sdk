@@ -22,7 +22,7 @@ $payitgo = new \Payitgo\Client(getenv('PAYITGO_KEY'), [
 // 1. checkout.php — create a payment and send the customer to the checkout page.
 $payment = $payitgo->payments->create([
     'order_id'    => $order->id,        // your order id: safe to retry
-    'amount_usd'  => $order->total,     // e.g. 19.99
+    'amount'      => $order->total,     // e.g. 19.99, in US dollars unless you give a currency
     // 'token'    => 'USDT_TRC20',      // optional: without it the customer picks the coin
     'success_url' => 'https://yourdomain.com/thanks',
 ]);
@@ -54,27 +54,28 @@ a live key when the account owner has turned live mode on. A key does not say it
 (the dashboard shows a Test or Live badge next to it): `$payitgo->isLive()` asks payitgo,
 once.
 
-## Prices in other currencies
+## Prices in your own currency
 
-To price a payment in your own currency, give `price_amount` and `price_currency` (an ISO
-4217 code such as `EUR`, `GBP` or `NGN`) instead of `amount_usd`. payitgo converts the price
-into dollars at the rate of the moment, and the payment keeps both:
+A payment is priced in US dollars unless you give `currency`, an ISO 4217 code such as `EUR`,
+`GBP` or `NGN` (any case). Every figure on the payment is then in that currency: `amount` (your
+price), `amount_due` (what the customer pays: the price, plus the fees when you pass them on),
+`amount_received` (what has arrived so far), each deposit's `value`, each coin's `minimum` and
+`network_fee` in `token_options`, and `rate_locked` (the coin's price). Only `crypto_amount`
+and `crypto_received` are in the coin.
 
 ```php
 $payment = $payitgo->payments->create([
-    'order_id'       => 'ORD-1002',
-    'price_amount'   => '45.50',   // sent as a string; prefer a string to a float
-    'price_currency' => 'EUR',     // any case
+    'order_id' => 'ORD-1002',
+    'amount'   => '45.50',   // sent as a string; prefer a string to a float
+    'currency' => 'EUR',     // any case; US dollars when left out
 ]);
-// $payment['price_amount'] '45.5', $payment['price_currency'] 'EUR',
-// $payment['price_rate'] '1.082' (dollars per euro), $payment['usd_amount'] '49.23'
+// $payment['currency'] 'EUR', $payment['amount'] '45.5', $payment['amount_due'] '45.5'
 ```
 
-Everything else (`usd_amount`, `crypto_amount`, fees, minimums) stays in dollars; a payment
-priced in dollars has no `price_*` keys (read them with `??`). Give `amount_usd` or the pair,
-not both (`400`). When no exchange rate can be had, `create()` throws a `PayitgoException`
-with status `503` (`exchange rate unavailable for price_currency: try again shortly`) once the
-client's retries are spent: try again shortly.
+payitgo converts at the rate of the moment. When no exchange rate can be had, `create()`
+throws a `PayitgoException` with status `503` (`exchange rate unavailable for currency: try
+again shortly`) once the client's retries are spent: try again shortly. A payment link priced
+in a coin has that coin as its `currency` (`ETH`), and its figures in the coin.
 
 ## Your own payment page
 
@@ -91,7 +92,7 @@ are needed.
   minutes away.
 
 ```php
-$payment = $payitgo->payments->create(['order_id' => 'ORD-1', 'amount_usd' => 10]);
+$payment = $payitgo->payments->create(['order_id' => 'ORD-1', 'amount' => 10]);
 // your page shows $payment['token_options']; the customer picks one
 $chosen = $payitgo->payments->selectToken($payment['id'], 'USDT_TRC20'); // or your order id
 // render $chosen['deposit_address'], $chosen['crypto_amount'], $chosen['qr_payload'], $chosen['expires_at']
@@ -111,7 +112,7 @@ outcome and payitgo plays its deposits, status changes and webhooks a few second
 ```php
 // Choose the outcome when you create the payment (with token it starts at once,
 // without it once the coin is chosen)…
-$payitgo->payments->create(['order_id' => 'TEST-1', 'amount_usd' => 10, 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']);
+$payitgo->payments->create(['order_id' => 'TEST-1', 'amount' => 10, 'token' => 'USDT_TRC20', 'simulate' => 'confirmed']);
 
 // …or later, on a payment you already have (its id or your order id).
 $payment = $payitgo->payments->simulate('TEST-2', 'partially_paid');
@@ -137,7 +138,7 @@ accepting POST requests), or give a payment its own when you create it:
 $payitgo->webhooks->set('https://api.yourdomain.com/payitgo/ipn');
 
 // Or per payment: its events go there instead of the webhook's URL.
-$payitgo->payments->create(['order_id' => 'ORD-1', 'amount_usd' => 10, 'webhook_url' => 'https://api.yourdomain.com/orders/ipn']);
+$payitgo->payments->create(['order_id' => 'ORD-1', 'amount' => 10, 'webhook_url' => 'https://api.yourdomain.com/orders/ipn']);
 
 // Or as the client's default for every payment it creates (a payment's own webhook_url wins):
 $shop = new \Payitgo\Client(getenv('PAYITGO_KEY'), ['webhook_url' => 'https://api.yourdomain.com/orders/ipn']);
@@ -421,16 +422,15 @@ $payitgo = new \Payitgo\Client($apiKey, [
 ]);
 
 $payitgo->isLive();                                   // false for a test key (asks payitgo once)
-$payitgo->payments->create(['order_id' => …, 'amount_usd' => …, 'token' => …, 'tokens' => […],
+$payitgo->payments->create(['order_id' => …, 'amount' => …, 'currency' => …, 'token' => …, 'tokens' => […],
                           'description' => …, 'metadata' => […], 'customer_email' => …,
                           'success_url' => …, 'cancel_url' => …, 'webhook_url' => …, 'simulate' => …]);
-$payitgo->payments->create(['order_id' => …, 'price_amount' => …, 'price_currency' => …, …]); // priced in another currency
 $payitgo->payments->selectToken($paymentId, $token);  // or your order id: the payment with its coin
 $payitgo->payments->simulate($paymentId, 'confirmed'); // test keys: plays the outcome
 $payitgo->payments->retrieve($paymentId);             // or your order id
 $payitgo->payments->list(['status' => 'confirmed', 'store_id' => $storeId, 'limit' => 50, 'offset' => 0]);
-$payitgo->tokens->list();                             // [['token' => …, 'chain' => …, 'min_usd' => …, 'network_fee_usd' => …, 'fee_note' => …, …]]
-$payitgo->tokens->list('49.90');                      // the coins a $49.90 payment offers, with amount_due_usd
+$payitgo->tokens->list();                             // [['token' => …, 'chain' => …, 'minimum' => …, 'network_fee' => …, 'fee_note' => …, …]], in US dollars
+$payitgo->tokens->list('49.90', 'EUR');               // the coins a 49.90 EUR payment offers, with amount_due
 $payitgo->checkout->retrieve($checkoutToken);         // public payer view
 $payitgo->webhooks->get();                            // ['livemode' => …, 'url' => …, 'secret' => …, 'events' => […], 'created_at' => …, 'updated_at' => …]
 $payitgo->webhooks->set($url);                        // the webhook
@@ -473,9 +473,9 @@ and [webhooks](https://api.payitgo.co/docs/webhooks)).
 
 ```php
 try {
-    $payitgo->payments->create(['order_id' => 'ORD-1', 'amount_usd' => 1, 'token' => 'BTC']);
+    $payitgo->payments->create(['order_id' => 'ORD-1', 'amount' => 1, 'token' => 'BTC']);
 } catch (\Payitgo\Exception\PayitgoException $e) {
-    echo $e->status, ' ', $e->getMessage(); // 400 minimum payment in BTC is $10 right now (network fees)
+    echo $e->status, ' ', $e->getMessage(); // 400 minimum payment in BTC is $10.00 right now (network fees)
 }
 ```
 

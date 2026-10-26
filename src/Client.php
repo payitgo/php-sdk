@@ -10,7 +10,7 @@ use Payitgo\Exception\PayitgoException;
  * The payitgo client. Use it from your server only: the API key is a secret.
  *
  *     $payitgo = new \Payitgo\Client(getenv('PAYITGO_KEY'));
- *     $payment = $payitgo->payments->create(['order_id' => 'ORD-1001', 'amount_usd' => 10, 'token' => 'USDT_TRC20']);
+ *     $payment = $payitgo->payments->create(['order_id' => 'ORD-1001', 'amount' => 10, 'token' => 'USDT_TRC20']);
  *     // send the customer to $payment['checkout_url']; fulfil on the payment.confirmed webhook
  *
  *     $payout = $payitgo->payouts->request(['reference' => 'WD-77', 'asset' => 'USDT_TRC20', 'address' => $address, 'amount' => '120']);
